@@ -1,2 +1,1 @@
-export { VoicePanel } from "./VoicePanel";
-export { createVoiceController } from "./controller";
+export { SESSION_ENDPOINT, REALTIME_MODEL, OUTPUT_MODE } from "./config";

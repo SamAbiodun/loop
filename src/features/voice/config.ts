@@ -1,14 +1,15 @@
-/**
- * Single source of truth for the realtime voice layer. The controller and any
- * future caller read from here so model/prompt changes happen in one place.
- */
+import type { OutputMode } from "realtime-voice-component";
 
 /** Server proxy that exchanges the WebRTC offer for a session — see app/api/session/route.ts. */
 export const SESSION_ENDPOINT = "/api/session";
 
 /**
- * Phase 0 smoke-test prompt: plain audio chat to prove the realtime loop works
- * end-to-end. Phase 1 swaps this for the interviewer behaviour.
+ * The build skill is canonical and calls for gpt-realtime-2. It's not in the
+ * library's KnownRealtimeModel union (tops out at gpt-realtime-1.5) but the
+ * model type accepts any string. Unverified until a live, funded key confirms
+ * the model exists on the account.
  */
-export const SMOKE_TEST_INSTRUCTIONS =
-  "You are a helpful assistant. Reply briefly and clearly out loud.";
+export const REALTIME_MODEL = "gpt-realtime-2";
+
+/** Interviewer must speak freely, so audio out (not tool-only). */
+export const OUTPUT_MODE: OutputMode = "audio";
