@@ -1,14 +1,45 @@
-import type { OutputMode } from "realtime-voice-component";
+import type { OutputMode, RealtimeAudioConfig } from "realtime-voice-component";
 
 /** Server proxy that exchanges the WebRTC offer for a session — see app/api/session/route.ts. */
 export const SESSION_ENDPOINT = "/api/session";
 
 /**
- * Confirmed available on the account (2026-06-01, GET /v1/models). Not in the
- * library's KnownRealtimeModel union (tops out at gpt-realtime-1.5), but the
- * model type accepts any string.
+ * Cost vs quality. mini is several times cheaper and the default; gpt-realtime-2
+ * is "hard mode". Both confirmed on the account (2026-06-01, GET /v1/models).
  */
-export const REALTIME_MODEL = "gpt-realtime-2";
+export const REALTIME_MODELS = {
+  practice: "gpt-realtime-mini",
+  hard: "gpt-realtime-2",
+} as const;
+
+export type InterviewMode = keyof typeof REALTIME_MODELS;
+
+export const MODE_LABELS: Record<InterviewMode, string> = {
+  practice: "Practice (cheaper)",
+  hard: "Hard (gpt-realtime-2)",
+};
+
+export const DEFAULT_MODE: InterviewMode = "practice";
+
+/** Auto-end a session after this long so a forgotten tab can't run up the bill. */
+export const SESSION_CAP_MINUTES = 30;
 
 /** Interviewer must speak freely, so audio out (not tool-only). */
 export const OUTPUT_MODE: OutputMode = "audio";
+
+/**
+ * Turn-taking. The library default ends a turn after 200ms of silence, which
+ * fragments short or paused speech into several turns (and several replies).
+ * Semantic VAD detects end-of-turn from meaning, so it won't cut the candidate
+ * off mid-thought or split a single utterance. Lower `eagerness` = more patient.
+ */
+export const AUDIO_CONFIG: RealtimeAudioConfig = {
+  input: {
+    turnDetection: {
+      type: "semantic_vad",
+      eagerness: "medium",
+      createResponse: true,
+      interruptResponse: true,
+    },
+  },
+};

@@ -1,26 +1,32 @@
 "use client";
 
 import { useState } from "react";
-import { PROBLEMS, type Problem } from "./problems";
+import type { InterviewMode } from "@/features/voice";
+import { type Problem } from "./problems";
 import { ProblemPicker } from "./ProblemPicker";
 import { InterviewSurface } from "./InterviewSurface";
 
-export function InterviewApp() {
-  const [problem, setProblem] = useState<Problem | null>(null);
+type Session = { problem: Problem; mode: InterviewMode };
 
-  if (!problem) {
+export function InterviewApp() {
+  const [session, setSession] = useState<Session | null>(null);
+
+  if (!session) {
     return (
       <div className="flex min-h-screen items-center justify-center p-8">
-        <ProblemPicker problems={PROBLEMS} onStart={setProblem} />
+        <ProblemPicker
+          onStart={(problem, mode) => setSession({ problem, mode })}
+        />
       </div>
     );
   }
 
   return (
     <InterviewSurface
-      key={problem.id}
-      problem={problem}
-      onExit={() => setProblem(null)}
+      key={session.problem.id}
+      problem={session.problem}
+      mode={session.mode}
+      onExit={() => setSession(null)}
     />
   );
 }

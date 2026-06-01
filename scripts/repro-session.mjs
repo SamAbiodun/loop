@@ -1,7 +1,6 @@
 import { chromium } from "playwright";
 
 const URL = "http://localhost:3000/";
-
 const browser = await chromium.launch({
   headless: true,
   args: [
@@ -10,26 +9,28 @@ const browser = await chromium.launch({
     "--autoplay-policy=no-user-gesture-required",
   ],
 });
-
 const context = await browser.newContext({ permissions: ["microphone"] });
 const page = await context.newPage();
 
-page.on("console", (msg) => console.log(`[c:${msg.type()}]`, msg.text()));
-page.on("pageerror", (err) => console.log("[pageerror]", err.message));
-page.on("request", (req) => {
-  if (req.url().includes("/api/session")) console.log("[req →]", req.method());
-});
-page.on("response", async (res) => {
-  if (res.url().includes("/api/session")) {
-    console.log("[res ←]", res.status(), (await res.text().catch(() => "")).slice(0, 160));
+const counts = {};
+page.on("console", (msg) => {
+  const t = msg.text();
+  const m = t.match(/event (\S+)/);
+  if (m) counts[m[1]] = (counts[m[1]] || 0) + 1;
+  if (/response\.created|speech_started|speech_stopped|response\.done|conversation\.item\.created|error/.test(t)) {
+    console.log(t.slice(0, 120));
   }
 });
+page.on("pageerror", (e) => console.log("[pageerror]", e.message));
 
 await page.goto(URL, { waitUntil: "networkidle" });
 await page.getByRole("button", { name: "Start interview" }).click();
-await page.waitForTimeout(1500);
-console.log("== clicking Start session ==");
+await page.waitForTimeout(1000);
 await page.getByRole("button", { name: "Start session" }).click();
 await page.waitForTimeout(9000);
-console.log("== done waiting ==");
+
+console.log("\n== event counts ==");
+for (const [k, v] of Object.entries(counts).sort((a, b) => b[1] - a[1])) {
+  console.log(`  ${v}× ${k}`);
+}
 await browser.close();

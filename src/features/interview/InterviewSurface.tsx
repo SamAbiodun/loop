@@ -2,6 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useVoiceControl, type VoiceControlController } from "realtime-voice-component";
+import {
+  MODE_LABELS,
+  SESSION_CAP_MINUTES,
+  type InterviewMode,
+} from "@/features/voice";
 import type { Problem } from "./problems";
 import { buildInterviewerInstructions } from "./prompts";
 import { createInterviewController } from "./interviewController";
@@ -18,15 +23,18 @@ const ACTIVITY_COLOR: Record<string, string> = {
 
 type InterviewSurfaceProps = {
   problem: Problem;
+  mode: InterviewMode;
   onExit: () => void;
 };
 
-export function InterviewSurface({ problem, onExit }: InterviewSurfaceProps) {
+export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProps) {
   const hintsRef = useRef(0);
   const [hints, setHints] = useState(0);
   const [ended, setEnded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [code, setCode] = useState(problem.starterCode);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
   // Lazy ref (not useMemo): the controller owns a WebRTC connection and is
   // destroyed on unmount, so it must survive re-renders and be recreated only
@@ -35,6 +43,7 @@ export function InterviewSurface({ problem, onExit }: InterviewSurfaceProps) {
   if (controllerRef.current === null) {
     controllerRef.current = createInterviewController({
       problem,
+      mode,
       onHintRequested: () => {
         hintsRef.current += 1;
         setHints(hintsRef.current);
@@ -66,6 +75,28 @@ export function InterviewSurface({ problem, onExit }: InterviewSurfaceProps) {
     if (ended) controller.disconnect();
   }, [ended, controller]);
 
+  // Session cost cap: start the clock on connect, auto-end at the limit.
+  useEffect(() => {
+    if (runtime.connected && startedAt === null) setStartedAt(Date.now());
+  }, [runtime.connected, startedAt]);
+
+  useEffect(() => {
+    if (startedAt === null) return;
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [startedAt]);
+
+  const capMs = SESSION_CAP_MINUTES * 60_000;
+  const remainingMs = startedAt === null ? capMs : Math.max(0, capMs - (now - startedAt));
+
+  useEffect(() => {
+    if (startedAt !== null && remainingMs === 0 && !ended) setEnded(true);
+  }, [remainingMs, startedAt, ended]);
+
+  const remaining = `${Math.floor(remainingMs / 60000)}:${String(
+    Math.floor((remainingMs % 60000) / 1000),
+  ).padStart(2, "0")}`;
+
   // Push the candidate's code into the interviewer's context, debounced.
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -94,6 +125,12 @@ export function InterviewSurface({ problem, onExit }: InterviewSurfaceProps) {
         </span>
 
         <span className="text-xs text-neutral-400">Hints: {hints}</span>
+
+        <span className="text-xs text-neutral-500">{MODE_LABELS[mode]}</span>
+
+        {startedAt !== null && (
+          <span className="text-xs text-neutral-400">⏱ {remaining}</span>
+        )}
 
         <div className="ml-auto flex gap-2">
           {!isLive && !ended && (
