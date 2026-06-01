@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useVoiceControl } from "realtime-voice-component";
+import { useEffect, useRef, useState } from "react";
+import { useVoiceControl, type VoiceControlController } from "realtime-voice-component";
 import type { Problem } from "./problems";
 import { buildInterviewerInstructions } from "./prompts";
 import { createInterviewController } from "./interviewController";
@@ -25,24 +25,42 @@ export function InterviewSurface({ problem, onExit }: InterviewSurfaceProps) {
   const hintsRef = useRef(0);
   const [hints, setHints] = useState(0);
   const [ended, setEnded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [code, setCode] = useState(problem.starterCode);
 
-  const controller = useMemo(
-    () =>
-      createInterviewController({
-        problem,
-        onHintRequested: () => {
-          hintsRef.current += 1;
-          setHints(hintsRef.current);
-        },
-        onEndSession: () => setEnded(true),
-      }),
-    [problem],
-  );
+  // Lazy ref (not useMemo): the controller owns a WebRTC connection and is
+  // destroyed on unmount, so it must survive re-renders and be recreated only
+  // when this component remounts (keyed by problem id in InterviewApp).
+  const controllerRef = useRef<VoiceControlController | null>(null);
+  if (controllerRef.current === null) {
+    controllerRef.current = createInterviewController({
+      problem,
+      onHintRequested: () => {
+        hintsRef.current += 1;
+        setHints(hintsRef.current);
+      },
+      onEndSession: () => setEnded(true),
+      onEditCode: setCode,
+      onError: setError,
+    });
+  }
+  const controller = controllerRef.current;
 
   const runtime = useVoiceControl(controller);
 
-  useEffect(() => () => controller.destroy(), [controller]);
+  const startSession = () => {
+    setError(null);
+    runtime.connect().catch((e: unknown) => {
+      setError(e instanceof Error ? e.message : String(e));
+    });
+  };
+
+  useEffect(() => {
+    return () => {
+      controller.destroy();
+      controllerRef.current = null;
+    };
+  }, [controller]);
 
   useEffect(() => {
     if (ended) controller.disconnect();
@@ -81,7 +99,7 @@ export function InterviewSurface({ problem, onExit }: InterviewSurfaceProps) {
           {!isLive && !ended && (
             <button
               type="button"
-              onClick={() => void runtime.connect()}
+              onClick={startSession}
               className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500"
             >
               Start session
@@ -105,6 +123,12 @@ export function InterviewSurface({ problem, onExit }: InterviewSurfaceProps) {
           </button>
         </div>
       </header>
+
+      {error && (
+        <div className="border-b border-red-900 bg-red-950/60 px-4 py-2 text-sm text-red-200">
+          {error}
+        </div>
+      )}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-2">
         <div className="min-h-0 border-r border-neutral-800">

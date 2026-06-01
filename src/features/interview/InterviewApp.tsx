@@ -16,5 +16,11 @@ export function InterviewApp() {
     );
   }
 
-  return <InterviewSurface problem={problem} onExit={() => setProblem(null)} />;
+  return (
+    <InterviewSurface
+      key={problem.id}
+      problem={problem}
+      onExit={() => setProblem(null)}
+    />
+  );
 }

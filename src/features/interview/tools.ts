@@ -19,6 +19,21 @@ export function createHintTool(onRequested: () => void) {
   });
 }
 
+export function createEditCodeTool(onEdit: (code: string) => void) {
+  return defineVoiceTool({
+    name: "edit_code",
+    description:
+      "Replace the entire contents of the candidate's code editor. Pass the COMPLETE new file contents (not a diff). Use this to scaffold, correct, or demonstrate code in the editor — stay in your interviewer role and don't hand over the full solution unprompted.",
+    parameters: z.object({
+      code: z.string().describe("The full new contents of the editor."),
+    }),
+    execute: ({ code }) => {
+      onEdit(code);
+      return { applied: true };
+    },
+  });
+}
+
 export function createEndTool(onEnd: () => void) {
   return defineVoiceTool({
     name: "end_session",
