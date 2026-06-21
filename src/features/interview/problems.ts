@@ -1,6 +1,9 @@
 import openProblemsRaw from "./problems.open.json";
+import { EXAMPLES } from "./examples";
 
 export type Difficulty = "Easy" | "Medium" | "Hard";
+
+export type Example = { input: string; output: string; explanation?: string };
 
 export type Problem = {
   id: string;
@@ -11,6 +14,7 @@ export type Problem = {
   constraints: string[];
   targetComplexity: string;
   starterCode: string;
+  examples: Example[];
   /** Marks problems pulled from the open dataset rather than the curated set. */
   source?: "curated" | "open";
 };
@@ -81,6 +85,7 @@ const p = (
   constraints,
   targetComplexity,
   starterCode,
+  examples: EXAMPLES[id] ?? [],
 });
 
 export const PROBLEMS: Problem[] = [
@@ -584,7 +589,9 @@ export const PROBLEMS: Problem[] = [
 ];
 
 /** Opt-in pool from the open APPS dataset (built by scripts/build-problems.mjs). */
-export const OPEN_PROBLEMS: Problem[] = openProblemsRaw as unknown as Problem[];
+export const OPEN_PROBLEMS: Problem[] = (
+  openProblemsRaw as unknown as Problem[]
+).map((prob) => ({ ...prob, examples: prob.examples ?? [] }));
 
 export const OPEN_CATEGORY = "Open Dataset (APPS · interview)";
 

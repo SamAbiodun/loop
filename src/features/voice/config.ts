@@ -35,11 +35,18 @@ export const OUTPUT_MODE: OutputMode = "audio";
  */
 export const AUDIO_CONFIG: RealtimeAudioConfig = {
   input: {
+    // Cut false "user is talking" triggers from speaker echo / room noise.
+    noiseReduction: { type: "near_field" },
     turnDetection: {
       type: "semantic_vad",
       eagerness: "medium",
       createResponse: true,
-      interruptResponse: true,
+      // Don't let detected audio cancel the interviewer mid-response. On
+      // speakers, the model hears itself and would otherwise cut its own reply
+      // off over and over. It now finishes its turn, then listens. (With
+      // headphones there's no echo, so this could be flipped back to true for
+      // barge-in.)
+      interruptResponse: false,
     },
   },
 };

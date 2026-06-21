@@ -1,6 +1,10 @@
 import type { Problem } from "./problems";
 
-export function buildInterviewerInstructions(problem: Problem, code: string): string {
+export function buildInterviewerInstructions(
+  problem: Problem,
+  code: string,
+  language: string,
+): string {
   const codeState =
     code.trim().length === 0 ? "(the editor is currently empty)" : code;
 
@@ -32,8 +36,21 @@ ${problem.constraints.map((c) => `- ${c}`).join("\n")}
 Expected complexity:
 ${problem.targetComplexity}
 
+Worked examples:
+${
+  problem.examples.length
+    ? problem.examples
+        .map(
+          (e) =>
+            `- Input: ${e.input} → Output: ${e.output}${e.explanation ? ` (${e.explanation})` : ""}`,
+        )
+        .join("\n")
+    : "(none provided)"
+}
+
 CANDIDATE STATE INJECTION
-Current code state from the candidate (updated live as they type):
+The candidate is coding in ${language}. Current editor contents (updated live
+as they type):
 \`\`\`
 ${codeState}
 \`\`\`

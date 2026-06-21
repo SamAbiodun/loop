@@ -8,6 +8,12 @@ import {
   type InterviewMode,
 } from "@/features/voice";
 import type { Problem } from "./problems";
+import {
+  DEFAULT_LANGUAGE,
+  LANGUAGES,
+  languageLabel,
+  starterFor,
+} from "./languages";
 import { buildInterviewerInstructions } from "./prompts";
 import { createInterviewController } from "./interviewController";
 import { CodeEditor } from "./CodeEditor";
@@ -33,6 +39,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   const [ended, setEnded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [code, setCode] = useState(problem.starterCode);
+  const [language, setLanguage] = useState(DEFAULT_LANGUAGE);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
@@ -62,6 +69,15 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
     runtime.connect().catch((e: unknown) => {
       setError(e instanceof Error ? e.message : String(e));
     });
+  };
+
+  const changeLanguage = (lang: string) => {
+    // Load the new template only if the editor is still the untouched template
+    // for the current language — never clobber code the candidate has written.
+    if (code === starterFor(language, problem.starterCode)) {
+      setCode(starterFor(lang, problem.starterCode));
+    }
+    setLanguage(lang);
   };
 
   useEffect(() => {
@@ -100,10 +116,12 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   // Push the candidate's code into the interviewer's context, debounced.
   useEffect(() => {
     const timer = setTimeout(() => {
-      controller.updateInstructions(buildInterviewerInstructions(problem, code));
+      controller.updateInstructions(
+        buildInterviewerInstructions(problem, code, languageLabel(language)),
+      );
     }, 500);
     return () => clearTimeout(timer);
-  }, [code, problem, controller]);
+  }, [code, language, problem, controller]);
 
   const isLive = runtime.connected || runtime.status === "connecting";
 
@@ -168,8 +186,24 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       )}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-2">
-        <div className="min-h-0 border-r border-neutral-800">
-          <CodeEditor value={code} onChange={setCode} />
+        <div className="flex min-h-0 flex-col border-r border-neutral-800">
+          <div className="flex items-center gap-2 border-b border-neutral-800 px-3 py-1.5">
+            <span className="text-xs text-neutral-500">Language</span>
+            <select
+              value={language}
+              onChange={(e) => changeLanguage(e.target.value)}
+              className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs text-neutral-100"
+            >
+              {LANGUAGES.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="min-h-0 flex-1">
+            <CodeEditor value={code} language={language} onChange={setCode} />
+          </div>
         </div>
 
         <div className="flex min-h-0 flex-col">
@@ -180,6 +214,23 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
                 <li key={c}>{c}</li>
               ))}
             </ul>
+            {problem.examples.length > 0 && (
+              <div className="mt-3 space-y-1">
+                {problem.examples.map((e, i) => (
+                  <div
+                    key={i}
+                    className="rounded bg-neutral-800/60 px-2 py-1 text-xs"
+                  >
+                    <code className="text-neutral-100">{e.input}</code>
+                    <span className="text-neutral-400"> → </span>
+                    <code className="text-neutral-100">{e.output}</code>
+                    {e.explanation && (
+                      <span className="text-neutral-500"> — {e.explanation}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
             <p className="mt-2 text-neutral-500">
               Target: {problem.targetComplexity}
             </p>
