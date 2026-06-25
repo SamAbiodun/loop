@@ -99,6 +99,35 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
     });
   };
 
+  const [running, setRunning] = useState(false);
+  const [output, setOutput] = useState<string | null>(null);
+
+  const runCode = async () => {
+    setRunning(true);
+    setOutput(null);
+    try {
+      const res = await fetch("/api/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language, code }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setOutput(data.error ?? `Run failed (${res.status})`);
+        return;
+      }
+      const text = [data.compileOutput, data.stdout, data.stderr]
+        .filter((s: string) => s && s.length)
+        .join("\n")
+        .trimEnd();
+      setOutput(text || "(no output)");
+    } catch (e) {
+      setOutput(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+
   const changeLanguage = (lang: string) => {
     // First visit to a language seeds its default starter; subsequent visits
     // restore whatever was last in that language's buffer.
@@ -239,10 +268,39 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
                 </option>
               ))}
             </select>
+            <button
+              type="button"
+              onClick={runCode}
+              disabled={running}
+              className="ml-auto rounded bg-green-700 px-3 py-1 text-xs font-medium text-white hover:bg-green-600 disabled:opacity-50"
+            >
+              {running ? "Running…" : "Run ▶"}
+            </button>
           </div>
           <div className="min-h-0 flex-1">
             <CodeEditor value={code} language={language} onChange={setCode} />
           </div>
+          {(output !== null || running) && (
+            <div className="max-h-48 shrink-0 overflow-y-auto border-t border-neutral-800 bg-neutral-950 p-3">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-xs uppercase tracking-wide text-neutral-500">
+                  Output
+                </span>
+                {!running && (
+                  <button
+                    type="button"
+                    onClick={() => setOutput(null)}
+                    className="text-xs text-neutral-500 hover:text-neutral-300"
+                  >
+                    clear
+                  </button>
+                )}
+              </div>
+              <pre className="whitespace-pre-wrap break-words text-xs text-neutral-200">
+                {running ? "Running…" : output}
+              </pre>
+            </div>
+          )}
         </div>
 
         <div className="flex min-h-0 flex-col">
