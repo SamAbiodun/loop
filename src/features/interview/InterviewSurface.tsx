@@ -101,6 +101,23 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
 
   const [running, setRunning] = useState(false);
   const [output, setOutput] = useState<string | null>(null);
+  const [outputHeight, setOutputHeight] = useState(192);
+
+  const startResizeOutput = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = outputHeight;
+    const onMove = (ev: PointerEvent) => {
+      // Drag up grows the panel, down shrinks it.
+      setOutputHeight(Math.min(700, Math.max(80, startH + (startY - ev.clientY))));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
 
   const runCode = async () => {
     setRunning(true);
@@ -280,13 +297,21 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
           <div className="min-h-0 flex-1">
             <CodeEditor value={code} language={language} onChange={setCode} />
           </div>
-          {(output !== null || running) && (
-            <div className="max-h-48 shrink-0 overflow-y-auto border-t border-neutral-800 bg-neutral-950 p-3">
+          <div
+            className="flex shrink-0 flex-col bg-neutral-950"
+            style={{ height: outputHeight }}
+          >
+            <div
+              onPointerDown={startResizeOutput}
+              className="h-1.5 shrink-0 cursor-row-resize bg-neutral-800 hover:bg-neutral-600"
+              title="Drag to resize"
+            />
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
               <div className="mb-1 flex items-center justify-between">
                 <span className="text-xs uppercase tracking-wide text-neutral-500">
                   Output
                 </span>
-                {!running && (
+                {output !== null && !running && (
                   <button
                     type="button"
                     onClick={() => setOutput(null)}
@@ -297,10 +322,18 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
                 )}
               </div>
               <pre className="whitespace-pre-wrap break-words text-xs text-neutral-200">
-                {running ? "Running…" : output}
+                {running ? (
+                  "Running…"
+                ) : output !== null ? (
+                  output
+                ) : (
+                  <span className="text-neutral-600">
+                    Press Run ▶ to execute your code.
+                  </span>
+                )}
               </pre>
             </div>
-          )}
+          </div>
         </div>
 
         <div className="flex min-h-0 flex-col">
