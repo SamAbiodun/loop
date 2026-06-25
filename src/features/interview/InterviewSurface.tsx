@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useVoiceControl, type VoiceControlController } from "realtime-voice-component";
 import {
   MODE_LABELS,
@@ -38,10 +38,37 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   const [hints, setHints] = useState(0);
   const [ended, setEnded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [code, setCode] = useState(problem.starterCode);
   const [language, setLanguage] = useState(DEFAULT_LANGUAGE);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+
+  // Each language keeps its own editor buffer, so switching languages shows
+  // that language's default starter the first time and restores prior work on
+  // return — never bleeding one language's code into another.
+  const [codeByLang, setCodeByLang] = useState<Record<string, string>>({
+    [DEFAULT_LANGUAGE]: problem.starterCode,
+  });
+  const code = codeByLang[language] ?? starterFor(language, problem.starterCode);
+
+  // Stable writer used by both Monaco's onChange and the interviewer's
+  // edit_code tool (captured once at controller creation), always targeting the
+  // currently selected language via a ref.
+  const languageRef = useRef(language);
+  useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
+  const setCode = useCallback((next: string) => {
+    setCodeByLang((m) => ({ ...m, [languageRef.current]: next }));
+  }, []);
+
+  // Authoritative live editor state for the interviewer's get_editor_state tool.
+  // The controller (and its tools) are created once, so they read through this
+  // ref rather than closing over a stale snapshot. Kept current via the effect
+  // below.
+  const editorStateRef = useRef({ code, language });
+  useEffect(() => {
+    editorStateRef.current = { code, language };
+  }, [code, language]);
 
   // Lazy ref (not useMemo): the controller owns a WebRTC connection and is
   // destroyed on unmount, so it must survive re-renders and be recreated only
@@ -51,6 +78,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
     controllerRef.current = createInterviewController({
       problem,
       mode,
+      getEditorState: () => editorStateRef.current,
       onHintRequested: () => {
         hintsRef.current += 1;
         setHints(hintsRef.current);
@@ -72,11 +100,11 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   };
 
   const changeLanguage = (lang: string) => {
-    // Load the new template only if the editor is still the untouched template
-    // for the current language — never clobber code the candidate has written.
-    if (code === starterFor(language, problem.starterCode)) {
-      setCode(starterFor(lang, problem.starterCode));
-    }
+    // First visit to a language seeds its default starter; subsequent visits
+    // restore whatever was last in that language's buffer.
+    setCodeByLang((m) =>
+      lang in m ? m : { ...m, [lang]: starterFor(lang, problem.starterCode) },
+    );
     setLanguage(lang);
   };
 
@@ -95,6 +123,17 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   useEffect(() => {
     if (runtime.connected && startedAt === null) setStartedAt(Date.now());
   }, [runtime.connected, startedAt]);
+
+  // Make the interviewer speak first. With VAD turn detection the model stays
+  // silent until the candidate talks, so on connect we explicitly ask for the
+  // opening response — the greeting / "how are you doing" intro exchange.
+  const greetedRef = useRef(false);
+  useEffect(() => {
+    if (runtime.connected && !greetedRef.current) {
+      greetedRef.current = true;
+      controller.requestResponse();
+    }
+  }, [runtime.connected, controller]);
 
   useEffect(() => {
     if (startedAt === null) return;

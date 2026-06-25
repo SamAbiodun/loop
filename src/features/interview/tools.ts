@@ -1,6 +1,24 @@
 import { z } from "zod";
 import { defineVoiceTool } from "realtime-voice-component";
 
+export type EditorState = { code: string; language: string };
+
+export function createGetEditorStateTool(getState: () => EditorState) {
+  return defineVoiceTool({
+    name: "get_editor_state",
+    description:
+      "Read the candidate's CURRENT editor contents and selected language. This is the authoritative, live state of the editor — call it whenever you need to know exactly what is on screen: before reviewing or testing their code, when they say they've written or changed something or are done, when they switch languages, or any time you're unsure what they currently have. Prefer this over assuming.",
+    parameters: z.object({}),
+    execute: () => {
+      const { code, language } = getState();
+      return {
+        language,
+        code: code.trim().length === 0 ? "(the editor is empty)" : code,
+      };
+    },
+  });
+}
+
 export function createHintTool(onRequested: () => void) {
   return defineVoiceTool({
     name: "request_hint",

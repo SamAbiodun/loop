@@ -9,13 +9,20 @@ import {
   type InterviewMode,
 } from "@/features/voice";
 import type { Problem } from "./problems";
-import { DEFAULT_LANGUAGE, languageLabel } from "./languages";
+import { languageLabel } from "./languages";
 import { buildInterviewerInstructions } from "./prompts";
-import { createEditCodeTool, createEndTool, createHintTool } from "./tools";
+import {
+  createEditCodeTool,
+  createEndTool,
+  createGetEditorStateTool,
+  createHintTool,
+  type EditorState,
+} from "./tools";
 
 type InterviewControllerOptions = {
   problem: Problem;
   mode: InterviewMode;
+  getEditorState: () => EditorState;
   onHintRequested: () => void;
   onEndSession: () => void;
   onEditCode: (code: string) => void;
@@ -25,23 +32,26 @@ type InterviewControllerOptions = {
 export function createInterviewController({
   problem,
   mode,
+  getEditorState,
   onHintRequested,
   onEndSession,
   onEditCode,
   onError,
 }: InterviewControllerOptions) {
+  const { code, language } = getEditorState();
   return createVoiceControlController({
     auth: { sessionEndpoint: SESSION_ENDPOINT },
     model: REALTIME_MODELS[mode],
     instructions: buildInterviewerInstructions(
       problem,
-      problem.starterCode,
-      languageLabel(DEFAULT_LANGUAGE),
+      code,
+      languageLabel(language),
     ),
     outputMode: OUTPUT_MODE,
     activationMode: "vad",
     audio: AUDIO_CONFIG,
     tools: [
+      createGetEditorStateTool(getEditorState),
       createHintTool(onHintRequested),
       createEditCodeTool(onEditCode),
       createEndTool(onEndSession),
