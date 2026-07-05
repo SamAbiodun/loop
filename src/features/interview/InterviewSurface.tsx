@@ -173,8 +173,15 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       await session.connect({ apiKey: value, model: REALTIME_MODELS[mode] });
       setStatus("live");
       setStartedAt(Date.now());
-      // Make the interviewer speak first (the greeting / intro), rather than
-      // waiting for the candidate to talk.
+      // Treat the greeting as already in flight: the half-duplex effect keys
+      // off `speaking`, so this keeps the mic closed from the very first live
+      // moment — otherwise room noise in the seconds before the greeting's
+      // audio_start would be committed as a phantom first candidate turn.
+      setSpeaking(true);
+      // Let the audio path settle so the greeting's first word isn't clipped,
+      // then make the interviewer speak first rather than waiting for the
+      // candidate to talk.
+      await new Promise((r) => setTimeout(r, 500));
       session.transport.sendEvent({ type: "response.create" });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
