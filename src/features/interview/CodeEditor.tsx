@@ -15,18 +15,25 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
 type CodeEditorProps = {
   value: string;
   language?: string;
+  /** Unique per buffer (problem + language). Giving each buffer its own Monaco
+   *  model keeps undo history, cursor, and scroll position per language —
+   *  without it, undo after a language switch restores the other language's
+   *  code into the current buffer. */
+  path?: string;
   onChange: (value: string) => void;
 };
 
 export function CodeEditor({
   value,
   language = "typescript",
+  path,
   onChange,
 }: CodeEditorProps) {
   return (
     <MonacoEditor
       height="100%"
       language={language}
+      path={path}
       theme="vs-dark"
       value={value}
       onChange={(next) => onChange(next ?? "")}

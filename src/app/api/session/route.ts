@@ -3,6 +3,11 @@ import { serverEnv } from "@/lib/env";
 
 export const runtime = "nodejs";
 
+/**
+ * Mints a short-lived ephemeral client secret so the browser can open a
+ * Realtime WebRTC session (via @openai/agents/realtime) without ever seeing the
+ * real API key. The client passes the returned `value` to session.connect().
+ */
 export async function POST(request: NextRequest) {
   let apiKey: string;
   try {
@@ -11,30 +16,28 @@ export async function POST(request: NextRequest) {
     return new Response((error as Error).message, { status: 500 });
   }
 
-  // The voice component posts multipart/form-data with `sdp` + `session`.
-  // Re-build the form server-side and forward it — streaming the raw request
-  // body straight through makes Node/undici throw "expected non-null body
-  // source", so we read it fully and re-send instead.
-  const incoming = await request.formData();
-  const form = new FormData();
-  const sdp = incoming.get("sdp");
-  const session = incoming.get("session");
-  if (typeof sdp === "string") form.set("sdp", sdp);
-  if (typeof session === "string") form.set("session", session);
+  let model = "gpt-realtime-mini";
+  try {
+    const body = await request.json();
+    if (typeof body?.model === "string") model = body.model;
+  } catch {
+    // no body / not JSON — fall back to the default model
+  }
 
-  const upstream = await fetch("https://api.openai.com/v1/realtime/calls", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
+  const upstream = await fetch(
+    "https://api.openai.com/v1/realtime/client_secrets",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ session: { type: "realtime", model } }),
     },
-    body: form,
-  });
+  );
 
   return new Response(await upstream.text(), {
     status: upstream.status,
-    headers: {
-      "Content-Type":
-        upstream.headers.get("content-type") ?? "application/sdp",
-    },
+    headers: { "Content-Type": "application/json" },
   });
 }

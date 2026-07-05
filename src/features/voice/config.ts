@@ -1,11 +1,10 @@
-import type { OutputMode, RealtimeAudioConfig } from "realtime-voice-component";
-
-/** Server proxy that exchanges the WebRTC offer for a session — see app/api/session/route.ts. */
+/** Server proxy that mints an ephemeral Realtime client secret — see
+ *  app/api/session/route.ts. */
 export const SESSION_ENDPOINT = "/api/session";
 
 /**
  * Cost vs quality. mini is several times cheaper and the default; gpt-realtime-2
- * is "hard mode". Both confirmed on the account (2026-06-01, GET /v1/models).
+ * is "hard mode". Both confirmed on the account.
  */
 export const REALTIME_MODELS = {
   practice: "gpt-realtime-mini",
@@ -24,29 +23,26 @@ export const DEFAULT_MODE: InterviewMode = "practice";
 /** Auto-end a session after this long so a forgotten tab can't run up the bill. */
 export const SESSION_CAP_MINUTES = 30;
 
-/** Interviewer must speak freely, so audio out (not tool-only). */
-export const OUTPUT_MODE: OutputMode = "audio";
+/** The interviewer's spoken voice (OpenAI Realtime voice id). */
+export const INTERVIEWER_VOICE = "cedar";
 
 /**
- * Turn-taking. The library default ends a turn after 200ms of silence, which
- * fragments short or paused speech into several turns (and several replies).
- * Semantic VAD detects end-of-turn from meaning, so it won't cut the candidate
- * off mid-thought or split a single utterance. Lower `eagerness` = more patient.
+ * Turn-taking. Semantic VAD ends a turn by meaning rather than a fixed silence,
+ * so it won't cut the candidate off mid-thought. `low` eagerness keeps it
+ * patient — the candidate reasons out loud with pauses, and we don't want it
+ * replying before they've finished.
  */
-export const AUDIO_CONFIG: RealtimeAudioConfig = {
-  input: {
-    // Cut false "user is talking" triggers from speaker echo / room noise.
-    noiseReduction: { type: "near_field" },
-    turnDetection: {
-      type: "semantic_vad",
-      eagerness: "medium",
-      createResponse: true,
-      // Don't let detected audio cancel the interviewer mid-response. On
-      // speakers, the model hears itself and would otherwise cut its own reply
-      // off over and over. It now finishes its turn, then listens. (With
-      // headphones there's no echo, so this could be flipped back to true for
-      // barge-in.)
-      interruptResponse: false,
-    },
-  },
-};
+export const VAD_EAGERNESS = "low" as const;
+
+/** far_field suits a laptop / external-speaker setup (mic across the desk). */
+export const NOISE_REDUCTION = "far_field" as const;
+
+/**
+ * Barge-in OFF. On speakers the interviewer's own voice echoes into the mic;
+ * with barge-in on, that echo makes the VAD think the candidate is talking, so
+ * the interviewer interrupts itself and reacts to its own audio — the
+ * conversation falls apart. With it off, the interviewer finishes its turn, then
+ * listens. (On headphones there's no echo and this could be flipped back to true
+ * for natural barge-in.)
+ */
+export const INTERRUPT_RESPONSE = false;

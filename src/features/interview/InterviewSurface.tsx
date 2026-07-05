@@ -1,31 +1,61 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useVoiceControl, type VoiceControlController } from "realtime-voice-component";
+import type { RealtimeSession } from "@openai/agents/realtime";
 import {
   MODE_LABELS,
+  REALTIME_MODELS,
   SESSION_CAP_MINUTES,
+  SESSION_ENDPOINT,
   type InterviewMode,
 } from "@/features/voice";
 import type { Problem } from "./problems";
-import {
-  DEFAULT_LANGUAGE,
-  LANGUAGES,
-  languageLabel,
-  starterFor,
-} from "./languages";
-import { buildInterviewerInstructions } from "./prompts";
-import { createInterviewController } from "./interviewController";
+import { DEFAULT_LANGUAGE, LANGUAGES, starterFor } from "./languages";
+import { createInterviewSession } from "./interviewController";
 import { CodeEditor } from "./CodeEditor";
 
 const ACTIVITY_COLOR: Record<string, string> = {
   idle: "bg-neutral-500",
   connecting: "bg-yellow-400",
   listening: "bg-green-500",
-  processing: "bg-blue-400",
-  executing: "bg-blue-400",
+  speaking: "bg-blue-400",
+  muted: "bg-amber-500",
   error: "bg-red-500",
 };
+
+const CAP_MS = SESSION_CAP_MINUTES * 60_000;
+
+/** Flatten the realtime conversation history into a readable transcript. */
+function buildTranscript(items: unknown[]): string {
+  const lines: string[] = [];
+  for (const raw of items) {
+    const item = raw as {
+      type?: string;
+      role?: string;
+      content?: { type?: string; text?: string; transcript?: string | null }[];
+    };
+    if (item.type !== "message") continue;
+    const who =
+      item.role === "assistant"
+        ? "Interviewer"
+        : item.role === "user"
+          ? "You"
+          : null;
+    if (!who) continue;
+    const text = (item.content ?? [])
+      .map((c) =>
+        c.type === "output_text" || c.type === "input_text"
+          ? (c.text ?? "")
+          : c.type === "output_audio" || c.type === "input_audio"
+            ? (c.transcript ?? "")
+            : "",
+      )
+      .join("")
+      .trim();
+    if (text) lines.push(`${who}: ${text}`);
+  }
+  return lines.join("\n\n");
+}
 
 type InterviewSurfaceProps = {
   problem: Problem;
@@ -34,13 +64,18 @@ type InterviewSurfaceProps = {
 };
 
 export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProps) {
-  const hintsRef = useRef(0);
   const [hints, setHints] = useState(0);
   const [ended, setEnded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [language, setLanguage] = useState(DEFAULT_LANGUAGE);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+
+  // Voice session state, derived from RealtimeSession events.
+  const [status, setStatus] = useState<"idle" | "connecting" | "live">("idle");
+  const [speaking, setSpeaking] = useState(false);
+  const [manualMuted, setManualMuted] = useState(false);
+  const [transcript, setTranscript] = useState("");
 
   // Each language keeps its own editor buffer, so switching languages shows
   // that language's default starter the first time and restores prior work on
@@ -51,7 +86,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   const code = codeByLang[language] ?? starterFor(language, problem.starterCode);
 
   // Stable writer used by both Monaco's onChange and the interviewer's
-  // edit_code tool (captured once at controller creation), always targeting the
+  // edit_code tool (captured once at session creation), always targeting the
   // currently selected language via a ref.
   const languageRef = useRef(language);
   useEffect(() => {
@@ -62,41 +97,121 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   }, []);
 
   // Authoritative live editor state for the interviewer's get_editor_state tool.
-  // The controller (and its tools) are created once, so they read through this
-  // ref rather than closing over a stale snapshot. Kept current via the effect
-  // below.
+  // The session (and its tools) are created once, so they read through this ref
+  // rather than closing over a stale snapshot.
   const editorStateRef = useRef({ code, language });
   useEffect(() => {
     editorStateRef.current = { code, language };
   }, [code, language]);
 
-  // Lazy ref (not useMemo): the controller owns a WebRTC connection and is
-  // destroyed on unmount, so it must survive re-renders and be recreated only
-  // when this component remounts (keyed by problem id in InterviewApp).
-  const controllerRef = useRef<VoiceControlController | null>(null);
-  if (controllerRef.current === null) {
-    controllerRef.current = createInterviewController({
+  const sessionRef = useRef<RealtimeSession | null>(null);
+
+  const finishInterview = useCallback(() => {
+    sessionRef.current?.close();
+    setSpeaking(false);
+    setStatus("idle");
+    setEnded(true);
+  }, []);
+
+  // The session owns the WebRTC connection. It's an external system, so it's
+  // created (and its events subscribed) in a mount effect and reached through
+  // sessionRef from handlers. One session per mount — the component is keyed
+  // by problem id in InterviewApp, so a new problem gets a fresh session.
+  useEffect(() => {
+    const session = createInterviewSession({
       problem,
       mode,
       getEditorState: () => editorStateRef.current,
-      onHintRequested: () => {
-        hintsRef.current += 1;
-        setHints(hintsRef.current);
-      },
-      onEndSession: () => setEnded(true),
+      onHintRequested: () => setHints((h) => h + 1),
+      onEndSession: finishInterview,
       onEditCode: setCode,
-      onError: setError,
     });
-  }
-  const controller = controllerRef.current;
+    sessionRef.current = session;
 
-  const runtime = useVoiceControl(controller);
+    const onHistory = (items: unknown[]) => setTranscript(buildTranscript(items));
+    const onAudioStart = () => setSpeaking(true);
+    const onAudioStopped = () => setSpeaking(false);
+    const onErr = (e: unknown) => {
+      setSpeaking(false);
+      const err = e as { error?: { message?: string }; message?: string };
+      setError(
+        typeof e === "string"
+          ? e
+          : (err?.error?.message ?? err?.message ?? "Voice session error"),
+      );
+    };
+    session.on("history_updated", onHistory);
+    session.on("audio_start", onAudioStart);
+    session.on("audio_stopped", onAudioStopped);
+    session.on("audio_interrupted", onAudioStopped);
+    session.on("error", onErr);
 
-  const startSession = () => {
+    return () => {
+      session.off("history_updated", onHistory);
+      session.off("audio_start", onAudioStart);
+      session.off("audio_stopped", onAudioStopped);
+      session.off("audio_interrupted", onAudioStopped);
+      session.off("error", onErr);
+      session.close();
+      sessionRef.current = null;
+    };
+  }, [problem, mode, setCode, finishInterview]);
+
+  const startSession = async () => {
+    const session = sessionRef.current;
+    if (!session) return;
     setError(null);
-    runtime.connect().catch((e: unknown) => {
+    setStatus("connecting");
+    try {
+      const res = await fetch(SESSION_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: REALTIME_MODELS[mode] }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const { value } = (await res.json()) as { value: string };
+      await session.connect({ apiKey: value, model: REALTIME_MODELS[mode] });
+      setStatus("live");
+      setStartedAt(Date.now());
+      // Make the interviewer speak first (the greeting / intro), rather than
+      // waiting for the candidate to talk.
+      session.transport.sendEvent({ type: "response.create" });
+    } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    });
+      setStatus("idle");
+    }
+  };
+
+  const toggleMute = () => setManualMuted((m) => !m);
+
+  // Half-duplex: keep the mic muted while the interviewer is speaking (so its
+  // own voice / room echo can't leak in and get mistaken for the candidate),
+  // and whenever the candidate has manually muted. The mic is only live when the
+  // interviewer is silent and the candidate hasn't muted.
+  useEffect(() => {
+    if (status !== "live") return;
+    sessionRef.current?.mute(manualMuted || speaking);
+  }, [manualMuted, speaking, status]);
+
+  // Safety net: if an audio_stopped event is ever missed, never leave the mic
+  // stuck muted — force "speaking" off after a turn could plausibly last.
+  useEffect(() => {
+    if (!speaking) return;
+    const t = setTimeout(() => setSpeaking(false), 20_000);
+    return () => clearTimeout(t);
+  }, [speaking]);
+
+  // Keep the transcript pinned to the latest exchange.
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = transcriptRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [transcript]);
+
+  const stopSession = () => {
+    sessionRef.current?.close();
+    setSpeaking(false);
+    setStatus("idle");
   };
 
   const [running, setRunning] = useState(false);
@@ -154,61 +269,36 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
     setLanguage(lang);
   };
 
+  // Session clock. The tick also enforces the hard cap so a forgotten tab
+  // can't run up the bill.
   useEffect(() => {
-    return () => {
-      controller.destroy();
-      controllerRef.current = null;
-    };
-  }, [controller]);
-
-  useEffect(() => {
-    if (ended) controller.disconnect();
-  }, [ended, controller]);
-
-  // Session cost cap: start the clock on connect, auto-end at the limit.
-  useEffect(() => {
-    if (runtime.connected && startedAt === null) setStartedAt(Date.now());
-  }, [runtime.connected, startedAt]);
-
-  // Make the interviewer speak first. With VAD turn detection the model stays
-  // silent until the candidate talks, so on connect we explicitly ask for the
-  // opening response — the greeting / "how are you doing" intro exchange.
-  const greetedRef = useRef(false);
-  useEffect(() => {
-    if (runtime.connected && !greetedRef.current) {
-      greetedRef.current = true;
-      controller.requestResponse();
-    }
-  }, [runtime.connected, controller]);
-
-  useEffect(() => {
-    if (startedAt === null) return;
-    const tick = setInterval(() => setNow(Date.now()), 1000);
+    if (startedAt === null || ended) return;
+    const tick = setInterval(() => {
+      setNow(Date.now());
+      if (Date.now() - startedAt >= CAP_MS) finishInterview();
+    }, 1000);
     return () => clearInterval(tick);
-  }, [startedAt]);
+  }, [startedAt, ended, finishInterview]);
 
-  const capMs = SESSION_CAP_MINUTES * 60_000;
-  const remainingMs = startedAt === null ? capMs : Math.max(0, capMs - (now - startedAt));
-
-  useEffect(() => {
-    if (startedAt !== null && remainingMs === 0 && !ended) setEnded(true);
-  }, [remainingMs, startedAt, ended]);
+  const remainingMs =
+    startedAt === null ? CAP_MS : Math.max(0, CAP_MS - (now - startedAt));
 
   const remaining = `${Math.floor(remainingMs / 60000)}:${String(
     Math.floor((remainingMs % 60000) / 1000),
   ).padStart(2, "0")}`;
 
-  // Push the candidate's code into the interviewer's context, debounced.
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      controller.updateInstructions(
-        buildInterviewerInstructions(problem, code, languageLabel(language)),
-      );
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [code, language, problem, controller]);
-
-  const isLive = runtime.connected || runtime.status === "connecting";
+  const isLive = status === "live" || status === "connecting";
+  const activity = error
+    ? "error"
+    : status === "connecting"
+      ? "connecting"
+      : status !== "live"
+        ? "idle"
+        : speaking
+          ? "speaking"
+          : manualMuted
+            ? "muted"
+            : "listening";
 
   return (
     <div className="flex h-screen flex-col">
@@ -216,7 +306,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
         <div className="flex items-center gap-2">
           <span
             className={`inline-block h-2.5 w-2.5 rounded-full ${
-              ACTIVITY_COLOR[runtime.activity] ?? "bg-neutral-500"
+              ACTIVITY_COLOR[activity] ?? "bg-neutral-500"
             }`}
           />
           <span className="text-sm font-medium">{problem.title}</span>
@@ -224,7 +314,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
         </div>
 
         <span className="text-xs uppercase tracking-wide text-neutral-400">
-          {ended ? "ended" : runtime.activity}
+          {ended ? "ended" : activity}
         </span>
 
         <span className="text-xs text-neutral-400">Hints: {hints}</span>
@@ -248,7 +338,20 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
           {isLive && (
             <button
               type="button"
-              onClick={() => runtime.disconnect()}
+              onClick={toggleMute}
+              className={`rounded-md border px-3 py-1.5 text-sm ${
+                manualMuted
+                  ? "border-red-600 bg-red-600/20 text-red-200"
+                  : "border-neutral-600 hover:bg-neutral-800"
+              }`}
+            >
+              {manualMuted ? "🔇 Muted" : "🎤 Mute"}
+            </button>
+          )}
+          {isLive && (
+            <button
+              type="button"
+              onClick={stopSession}
               className="rounded-md border border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-800"
             >
               Stop session
@@ -295,7 +398,12 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
             </button>
           </div>
           <div className="min-h-0 flex-1">
-            <CodeEditor value={code} language={language} onChange={setCode} />
+            <CodeEditor
+              value={code}
+              language={language}
+              path={`${problem.id}/${language}`}
+              onChange={setCode}
+            />
           </div>
           <div
             className="flex shrink-0 flex-col bg-neutral-950"
@@ -366,9 +474,9 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
             </p>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto p-4">
             <h2 className="mb-2 text-xs uppercase tracking-wide text-neutral-500">
-              Interviewer transcript
+              Transcript
             </h2>
             {ended && (
               <p className="mb-2 rounded bg-neutral-800 px-2 py-1 text-xs text-neutral-300">
@@ -376,7 +484,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
               </p>
             )}
             <p className="whitespace-pre-wrap text-sm text-neutral-200">
-              {runtime.transcript || (
+              {transcript || (
                 <span className="text-neutral-500">
                   Click Start session, allow the mic, and begin talking through
                   the problem.

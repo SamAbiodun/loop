@@ -1,11 +1,12 @@
 "use client";
 
-import { createVoiceControlController } from "realtime-voice-component";
+import { RealtimeAgent, RealtimeSession } from "@openai/agents/realtime";
 import {
-  AUDIO_CONFIG,
-  OUTPUT_MODE,
+  INTERRUPT_RESPONSE,
+  INTERVIEWER_VOICE,
+  NOISE_REDUCTION,
   REALTIME_MODELS,
-  SESSION_ENDPOINT,
+  VAD_EAGERNESS,
   type InterviewMode,
 } from "@/features/voice";
 import type { Problem } from "./problems";
@@ -19,49 +20,66 @@ import {
   type EditorState,
 } from "./tools";
 
-type InterviewControllerOptions = {
+type InterviewSessionOptions = {
   problem: Problem;
   mode: InterviewMode;
   getEditorState: () => EditorState;
   onHintRequested: () => void;
   onEndSession: () => void;
   onEditCode: (code: string) => void;
-  onError?: (message: string) => void;
 };
 
-export function createInterviewController({
+/**
+ * Builds the conversational voice layer on @openai/agents/realtime: a
+ * RealtimeAgent (instructions + app-owned tools) driven by a RealtimeSession
+ * that owns the WebRTC connection, mic capture, audio playback, and turn-taking.
+ */
+export function createInterviewSession({
   problem,
   mode,
   getEditorState,
   onHintRequested,
   onEndSession,
   onEditCode,
-  onError,
-}: InterviewControllerOptions) {
+}: InterviewSessionOptions) {
   const { code, language } = getEditorState();
-  return createVoiceControlController({
-    auth: { sessionEndpoint: SESSION_ENDPOINT },
-    model: REALTIME_MODELS[mode],
+
+  const agent = new RealtimeAgent({
+    name: "Interviewer",
     instructions: buildInterviewerInstructions(
       problem,
       code,
       languageLabel(language),
     ),
-    outputMode: OUTPUT_MODE,
-    activationMode: "vad",
-    audio: AUDIO_CONFIG,
+    voice: INTERVIEWER_VOICE,
     tools: [
       createGetEditorStateTool(getEditorState),
       createHintTool(onHintRequested),
       createEditCodeTool(onEditCode),
       createEndTool(onEndSession),
     ],
-    onError: (error) => {
-      // Benign: fires when the candidate talks over the interviewer while
-      // interruptResponse is off — the API rejects the duplicate response, but
-      // the conversation continues fine. Don't surface it to the user.
-      if (/active response in progress/i.test(error.message)) return;
-      onError?.(error.message);
+  });
+
+  const session = new RealtimeSession(agent, {
+    transport: "webrtc",
+    model: REALTIME_MODELS[mode],
+    config: {
+      outputModalities: ["audio"],
+      audio: {
+        input: {
+          noiseReduction: { type: NOISE_REDUCTION },
+          transcription: { model: "gpt-4o-mini-transcribe" },
+          turnDetection: {
+            type: "semantic_vad",
+            eagerness: VAD_EAGERNESS,
+            createResponse: true,
+            interruptResponse: INTERRUPT_RESPONSE,
+          },
+        },
+        output: { voice: INTERVIEWER_VOICE },
+      },
     },
   });
+
+  return session;
 }
