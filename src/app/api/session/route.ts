@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { serverEnv } from "@/lib/env";
+import { isUnlocked } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -9,6 +10,10 @@ export const runtime = "nodejs";
  * real API key. The client passes the returned `value` to session.connect().
  */
 export async function POST(request: NextRequest) {
+  if (!isUnlocked(request)) {
+    return new Response("Locked — enter the passcode.", { status: 401 });
+  }
+
   let apiKey: string;
   try {
     apiKey = serverEnv.openaiApiKey;

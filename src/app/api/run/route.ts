@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { isUnlocked } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -35,6 +36,10 @@ type Details = {
 };
 
 export async function POST(request: NextRequest) {
+  if (!isUnlocked(request)) {
+    return Response.json({ error: "Locked — enter the passcode." }, { status: 401 });
+  }
+
   const { language, code, stdin } = (await request.json()) as {
     language?: string;
     code?: string;
