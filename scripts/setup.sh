@@ -41,7 +41,7 @@ elif [ -f "$LOOP_DIR/.env.local.example" ]; then
   cp "$LOOP_DIR/.env.local.example" "$LOOP_DIR/.env.local"
   warn "Created .env.local from the example — add your OPENAI_API_KEY before running."
 else
-  printf 'OPENAI_API_KEY=\n\n# Optional shared passcode. Leave unset to run open (fine for localhost);\n# set it in production to gate the paid APIs. See README > Deploying.\n# APP_PASSCODE=\n' > "$LOOP_DIR/.env.local"
+  printf 'OPENAI_API_KEY=\n\n# Leave the gate vars unset to run open on localhost. In production set\n# ADMIN_PASSCODE (enables the /admin access-code panel) plus Upstash Redis.\n# See README > Deploying.\n# ADMIN_PASSCODE=\n# UPSTASH_REDIS_REST_URL=\n# UPSTASH_REDIS_REST_TOKEN=\n' > "$LOOP_DIR/.env.local"
   warn "Created an empty .env.local — add your OPENAI_API_KEY before running."
 fi
 

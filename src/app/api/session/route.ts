@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { serverEnv } from "@/lib/env";
-import { isUnlocked } from "@/lib/auth";
+import { unlockState } from "@/lib/auth";
+import { recordSession } from "@/lib/codes";
 
 export const runtime = "nodejs";
 
@@ -10,7 +11,8 @@ export const runtime = "nodejs";
  * real API key. The client passes the returned `value` to session.connect().
  */
 export async function POST(request: NextRequest) {
-  if (!isUnlocked(request)) {
+  const { unlocked, code } = await unlockState(request);
+  if (!unlocked) {
     return new Response("Locked — enter the passcode.", { status: 401 });
   }
 
@@ -40,6 +42,9 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify({ session: { type: "realtime", model } }),
     },
   );
+
+  // A successful mint marks a session start for this code's usage.
+  if (upstream.ok && code) await recordSession(code).catch(() => {});
 
   return new Response(await upstream.text(), {
     status: upstream.status,

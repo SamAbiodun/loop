@@ -116,12 +116,29 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   // can't race the async setup.
   const readyRef = useRef<Promise<void>>(Promise.resolve());
 
+  // Wall-clock start of the current live stretch. Set when the session goes
+  // live, cleared when it ends — so we can report elapsed voice time (the
+  // OpenAI cost driver) to per-code usage tracking.
+  const liveSinceRef = useRef<number | null>(null);
+  const flushUsage = useCallback(() => {
+    const since = liveSinceRef.current;
+    if (since === null) return;
+    liveSinceRef.current = null;
+    const seconds = Math.round((Date.now() - since) / 1000);
+    if (seconds > 0 && typeof navigator !== "undefined" && navigator.sendBeacon) {
+      // Beacon (not fetch) so it still sends during unload; cookies ride along
+      // so the server attributes the minutes to this visitor's access code.
+      navigator.sendBeacon("/api/usage", JSON.stringify({ seconds }));
+    }
+  }, []);
+
   const finishInterview = useCallback(() => {
+    flushUsage();
     sessionRef.current?.close();
     setSpeaking(false);
     setStatus("idle");
     setEnded(true);
-  }, []);
+  }, [flushUsage]);
 
   // The session owns the WebRTC connection. It's an external system, so it's
   // created (and its events subscribed) in a mount effect and reached through
@@ -201,6 +218,18 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
     micRef.current?.setThresholdDb(gateDb);
   }, [gateDb, micReady]);
 
+  // Report in-progress voice time if the tab closes or the surface unmounts
+  // (e.g. "Back to problems") without an explicit Stop. flushUsage no-ops when
+  // there's nothing pending, so overlapping with Stop/End is safe.
+  useEffect(() => {
+    const onHide = () => flushUsage();
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      flushUsage();
+    };
+  }, [flushUsage]);
+
   // Prefetch the ephemeral client key so Start doesn't pay the mint
   // round-trip. Keys live 10 minutes and are single-use; startSession
   // consumes the cached one and falls back to a fresh fetch when stale.
@@ -244,6 +273,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       await session.connect({ apiKey: value, model: REALTIME_MODELS[mode] });
       setStatus("live");
       setStartedAt(Date.now());
+      liveSinceRef.current = Date.now();
       // Treat the greeting as already in flight: the half-duplex effect keys
       // off `speaking`, so this keeps the mic closed from the very first live
       // moment — otherwise room noise in the seconds before the greeting's
@@ -287,6 +317,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   }, [transcript]);
 
   const stopSession = () => {
+    flushUsage();
     sessionRef.current?.close();
     setSpeaking(false);
     setStatus("idle");

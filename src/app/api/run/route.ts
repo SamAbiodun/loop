@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
-import { isUnlocked } from "@/lib/auth";
+import { unlockState } from "@/lib/auth";
+import { recordRun } from "@/lib/codes";
 
 export const runtime = "nodejs";
 
@@ -36,7 +37,8 @@ type Details = {
 };
 
 export async function POST(request: NextRequest) {
-  if (!isUnlocked(request)) {
+  const { unlocked, code: accessCode } = await unlockState(request);
+  if (!unlocked) {
     return Response.json({ error: "Locked — enter the passcode." }, { status: 401 });
   }
 
@@ -53,6 +55,8 @@ export async function POST(request: NextRequest) {
       { status: 400 },
     );
   }
+
+  if (accessCode) await recordRun(accessCode).catch(() => {});
 
   // Paiza compiles TypeScript with strict `tsc`, which rejects the empty
   // function bodies in the starters (TS2355). Suppress type-checking at run
