@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import type { Monaco } from "@monaco-editor/react";
 
 // Monaco touches `window`, so it must not render on the server.
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
@@ -11,6 +12,33 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
     </div>
   ),
 });
+
+/** vs-dark, re-tinted to sit flush on the app's neutral-950 background. */
+function defineLoopTheme(monaco: Monaco) {
+  monaco.editor.defineTheme("loop-dark", {
+    base: "vs-dark",
+    inherit: true,
+    rules: [],
+    colors: {
+      "editor.background": "#0a0a0a",
+      "editor.lineHighlightBackground": "#17171780",
+      "editorGutter.background": "#0a0a0a",
+      "editorLineNumber.foreground": "#3f3f46",
+      "editorLineNumber.activeForeground": "#a1a1aa",
+      "editorIndentGuide.background1": "#1c1c1f",
+      "editorIndentGuide.activeBackground1": "#33333a",
+      "editorWidget.background": "#131316",
+      "editorWidget.border": "#27272a",
+      "editorSuggestWidget.background": "#131316",
+      "editorSuggestWidget.selectedBackground": "#1d4ed830",
+      "scrollbarSlider.background": "#27272a66",
+      "scrollbarSlider.hoverBackground": "#3f3f4699",
+      "scrollbar.shadow": "#00000000",
+      "editorOverviewRuler.border": "#00000000",
+      "focusBorder": "#00000000",
+    },
+  });
+}
 
 type CodeEditorProps = {
   value: string;
@@ -34,15 +62,27 @@ export function CodeEditor({
       height="100%"
       language={language}
       path={path}
-      theme="vs-dark"
+      theme="loop-dark"
+      beforeMount={defineLoopTheme}
       value={value}
       onChange={(next) => onChange(next ?? "")}
       options={{
         minimap: { enabled: false },
         fontSize: 14,
+        lineHeight: 22,
         scrollBeyondLastLine: false,
         tabSize: 2,
         automaticLayout: true,
+        padding: { top: 14, bottom: 10 },
+        cursorBlinking: "smooth",
+        cursorSmoothCaretAnimation: "on",
+        smoothScrolling: true,
+        renderLineHighlight: "line",
+        scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
+        overviewRulerLanes: 0,
+        hideCursorInOverviewRuler: true,
+        guides: { indentation: true },
+        fontLigatures: true,
       }}
     />
   );

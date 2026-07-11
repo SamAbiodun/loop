@@ -4,9 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { RealtimeSession } from "@openai/agents/realtime";
 import {
   MODE_LABELS,
+  NOISE_GATE_DB,
   REALTIME_MODELS,
   SESSION_CAP_MINUTES,
   SESSION_ENDPOINT,
+  createGatedMic,
+  type GatedMic,
   type InterviewMode,
 } from "@/features/voice";
 import type { Problem } from "./problems";
@@ -76,6 +79,9 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   const [speaking, setSpeaking] = useState(false);
   const [manualMuted, setManualMuted] = useState(false);
   const [transcript, setTranscript] = useState("");
+  const [showTranscript, setShowTranscript] = useState(false);
+  const [micReady, setMicReady] = useState(false);
+  const [gateDb, setGateDb] = useState(NOISE_GATE_DB);
 
   // Each language keeps its own editor buffer, so switching languages shows
   // that language's default starter the first time and restores prior work on
@@ -105,6 +111,10 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   }, [code, language]);
 
   const sessionRef = useRef<RealtimeSession | null>(null);
+  const micRef = useRef<GatedMic | null>(null);
+  // Resolves once the mic + session exist; Start awaits it so clicking early
+  // can't race the async setup.
+  const readyRef = useRef<Promise<void>>(Promise.resolve());
 
   const finishInterview = useCallback(() => {
     sessionRef.current?.close();
@@ -117,16 +127,12 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   // created (and its events subscribed) in a mount effect and reached through
   // sessionRef from handlers. One session per mount — the component is keyed
   // by problem id in InterviewApp, so a new problem gets a fresh session.
+  // The mic is acquired here too (not at Start) so the permission prompt and
+  // device warm-up are already done when the candidate clicks Start.
   useEffect(() => {
-    const session = createInterviewSession({
-      problem,
-      mode,
-      getEditorState: () => editorStateRef.current,
-      onHintRequested: () => setHints((h) => h + 1),
-      onEndSession: finishInterview,
-      onEditCode: setCode,
-    });
-    sessionRef.current = session;
+    let cancelled = false;
+    let mic: GatedMic | null = null;
+    let session: RealtimeSession | null = null;
 
     const onHistory = (items: unknown[]) => setTranscript(buildTranscript(items));
     const onAudioStart = () => setSpeaking(true);
@@ -140,36 +146,101 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
           : (err?.error?.message ?? err?.message ?? "Voice session error"),
       );
     };
-    session.on("history_updated", onHistory);
-    session.on("audio_start", onAudioStart);
-    session.on("audio_stopped", onAudioStopped);
-    session.on("audio_interrupted", onAudioStopped);
-    session.on("error", onErr);
+
+    readyRef.current = (async () => {
+      try {
+        mic = await createGatedMic(NOISE_GATE_DB);
+      } catch {
+        // Mic blocked or unavailable — fall back to the transport's own
+        // capture (no gate); the browser will prompt again on connect.
+        mic = null;
+      }
+      if (cancelled) {
+        mic?.dispose();
+        return;
+      }
+      micRef.current = mic;
+      setMicReady(mic !== null);
+
+      session = createInterviewSession({
+        problem,
+        mode,
+        micStream: mic?.stream,
+        getEditorState: () => editorStateRef.current,
+        onHintRequested: () => setHints((h) => h + 1),
+        onEndSession: finishInterview,
+        onEditCode: setCode,
+      });
+      sessionRef.current = session;
+
+      session.on("history_updated", onHistory);
+      session.on("audio_start", onAudioStart);
+      session.on("audio_stopped", onAudioStopped);
+      session.on("audio_interrupted", onAudioStopped);
+      session.on("error", onErr);
+    })();
 
     return () => {
-      session.off("history_updated", onHistory);
-      session.off("audio_start", onAudioStart);
-      session.off("audio_stopped", onAudioStopped);
-      session.off("audio_interrupted", onAudioStopped);
-      session.off("error", onErr);
-      session.close();
+      cancelled = true;
+      if (session) {
+        session.off("history_updated", onHistory);
+        session.off("audio_start", onAudioStart);
+        session.off("audio_stopped", onAudioStopped);
+        session.off("audio_interrupted", onAudioStopped);
+        session.off("error", onErr);
+        session.close();
+      }
+      mic?.dispose();
       sessionRef.current = null;
+      micRef.current = null;
     };
   }, [problem, mode, setCode, finishInterview]);
 
+  // Live-adjust the gate threshold from the header slider.
+  useEffect(() => {
+    micRef.current?.setThresholdDb(gateDb);
+  }, [gateDb, micReady]);
+
+  // Prefetch the ephemeral client key so Start doesn't pay the mint
+  // round-trip. Keys live 10 minutes and are single-use; startSession
+  // consumes the cached one and falls back to a fresh fetch when stale.
+  const keyRef = useRef<{ value: string; expiresAt: number } | null>(null);
+  const fetchKey = useCallback(async () => {
+    const res = await fetch(SESSION_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: REALTIME_MODELS[mode] }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = (await res.json()) as { value: string; expires_at?: number };
+    keyRef.current = {
+      value: data.value,
+      expiresAt: (data.expires_at ?? 0) * 1000,
+    };
+    return data.value;
+  }, [mode]);
+  useEffect(() => {
+    // Warm the cache; a failure here isn't an error yet — Start retries.
+    fetchKey().catch(() => {});
+  }, [fetchKey]);
+
   const startSession = async () => {
-    const session = sessionRef.current;
-    if (!session) return;
     setError(null);
     setStatus("connecting");
     try {
-      const res = await fetch(SESSION_ENDPOINT, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: REALTIME_MODELS[mode] }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const { value } = (await res.json()) as { value: string };
+      await readyRef.current;
+      const session = sessionRef.current;
+      if (!session) throw new Error("Session setup failed — reload the page.");
+      // The gate's AudioContext needs a user gesture to run; this click is it.
+      await micRef.current?.resume();
+      // Use the prefetched key when it's still comfortably valid (they're
+      // single-use, so drop it either way); otherwise mint a fresh one.
+      const cached = keyRef.current;
+      const value =
+        cached && cached.expiresAt - Date.now() > 30_000
+          ? cached.value
+          : await fetchKey();
+      keyRef.current = null; // consumed by this connect either way
       await session.connect({ apiKey: value, model: REALTIME_MODELS[mode] });
       setStatus("live");
       setStartedAt(Date.now());
@@ -342,6 +413,26 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
               Start session
             </button>
           )}
+          {isLive && micReady && (
+            <label
+              className="flex items-center gap-1.5 rounded-md border border-neutral-700 px-2 text-xs text-neutral-400"
+              title="Noise gate — mic sounds quieter than this never reach the interviewer. Raise it if background noise still gets through; lower it if it clips your voice."
+            >
+              gate
+              <input
+                type="range"
+                min={-70}
+                max={-30}
+                step={1}
+                value={gateDb}
+                onChange={(e) => setGateDb(Number(e.target.value))}
+                className="w-20 accent-blue-500"
+              />
+              <span className="w-12 tabular-nums text-neutral-500">
+                {gateDb} dB
+              </span>
+            </label>
+          )}
           {isLive && (
             <button
               type="button"
@@ -382,12 +473,12 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
 
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-2">
         <div className="flex min-h-0 flex-col border-r border-neutral-800">
-          <div className="flex items-center gap-2 border-b border-neutral-800 px-3 py-1.5">
+          <div className="flex items-center gap-2 border-b border-neutral-800 bg-neutral-900/40 px-3 py-1.5">
             <span className="text-xs text-neutral-500">Language</span>
             <select
               value={language}
               onChange={(e) => changeLanguage(e.target.value)}
-              className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs text-neutral-100"
+              className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none focus:border-blue-500/60"
             >
               {LANGUAGES.map((l) => (
                 <option key={l.id} value={l.id}>
@@ -399,7 +490,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
               type="button"
               onClick={runCode}
               disabled={running}
-              className="ml-auto rounded bg-green-700 px-3 py-1 text-xs font-medium text-white hover:bg-green-600 disabled:opacity-50"
+              className="ml-auto rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
             >
               {running ? "Running…" : "Run ▶"}
             </button>
@@ -481,24 +572,42 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
             </p>
           </div>
 
-          <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto p-4">
-            <h2 className="mb-2 text-xs uppercase tracking-wide text-neutral-500">
+          <div className="flex items-center justify-between border-b border-neutral-800/60 px-4 py-2">
+            <h2 className="text-xs uppercase tracking-wide text-neutral-500">
               Transcript
             </h2>
-            {ended && (
-              <p className="mb-2 rounded bg-neutral-800 px-2 py-1 text-xs text-neutral-300">
-                Interview ended.
-              </p>
-            )}
-            <p className="whitespace-pre-wrap text-sm text-neutral-200">
-              {transcript || (
-                <span className="text-neutral-500">
-                  Click Start session, allow the mic, and begin talking through
-                  the problem.
-                </span>
-              )}
-            </p>
+            <button
+              type="button"
+              onClick={() => setShowTranscript((s) => !s)}
+              className={`rounded-md border px-2.5 py-1 text-xs ${
+                showTranscript
+                  ? "border-blue-600/60 bg-blue-600/15 text-blue-200"
+                  : "border-neutral-700 text-neutral-400 hover:bg-neutral-800"
+              }`}
+            >
+              {showTranscript ? "Hide" : "Show"}
+            </button>
           </div>
+          {showTranscript && (
+            <div
+              ref={transcriptRef}
+              className="min-h-0 flex-1 overflow-y-auto p-4"
+            >
+              {ended && (
+                <p className="mb-2 rounded bg-neutral-800 px-2 py-1 text-xs text-neutral-300">
+                  Interview ended.
+                </p>
+              )}
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-neutral-200">
+                {transcript || (
+                  <span className="text-neutral-500">
+                    Click Start session, allow the mic, and begin talking
+                    through the problem.
+                  </span>
+                )}
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>

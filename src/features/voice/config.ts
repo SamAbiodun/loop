@@ -13,9 +13,16 @@ export const REALTIME_MODELS = {
 
 export type InterviewMode = keyof typeof REALTIME_MODELS;
 
+/** The modes pick which model powers the interviewer — same problems, same
+ *  interview; the difference is interviewer sharpness vs per-minute cost. */
 export const MODE_LABELS: Record<InterviewMode, string> = {
-  practice: "Practice (cheaper)",
-  hard: "Hard (gpt-realtime-2)",
+  practice: "Standard",
+  hard: "Sharper",
+};
+
+export const MODE_DESCRIPTIONS: Record<InterviewMode, string> = {
+  practice: "gpt-realtime-mini · quick and inexpensive — great for reps",
+  hard: "gpt-realtime-2 · probes harder and follows up better — costs more per minute",
 };
 
 export const DEFAULT_MODE: InterviewMode = "practice";
@@ -36,6 +43,28 @@ export const VAD_EAGERNESS = "low" as const;
 
 /** far_field suits a laptop / external-speaker setup (mic across the desk). */
 export const NOISE_REDUCTION = "far_field" as const;
+
+/**
+ * Mic noise gate (see micGate.ts): sound quieter than this many dBFS never
+ * reaches the interviewer, so background noise can't register as a turn.
+ * Speech at a laptop mic typically peaks well above -40; steady room noise
+ * sits below -55. Adjustable live via the "gate" slider in the session header.
+ * -53 = Sam's tuned-by-ear value on his setup (2026-07-06).
+ */
+export const NOISE_GATE_DB = -53;
+
+/**
+ * Transcription of the CANDIDATE's speech — display-only (the transcript
+ * panel). The interviewer model listens to the raw audio directly and doesn't
+ * use this. Pinning the language and priming with interview vocabulary cuts
+ * the hallucinated lines ASR models produce on quiet or clipped audio.
+ */
+export const TRANSCRIPTION = {
+  model: "gpt-4o-mini-transcribe",
+  language: "en",
+  prompt:
+    "A software engineering candidate reasoning out loud in a data-structures-and-algorithms coding interview. Expect terms like: array, hash map, hash set, pointer, two pointers, sliding window, linked list, binary search, binary tree, BFS, DFS, heap, stack, queue, recursion, dynamic programming, time complexity, space complexity, big O, O(n), O(log n), O(n squared), edge case, null, index, iterate.",
+} as const;
 
 /**
  * Barge-in OFF. On speakers the interviewer's own voice echoes into the mic;

@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import {
   DEFAULT_MODE,
+  MODE_DESCRIPTIONS,
   MODE_LABELS,
   REALTIME_MODELS,
   type InterviewMode,
@@ -11,6 +12,7 @@ import {
   OPEN_PROBLEMS,
   PROBLEMS,
   groupByCategory,
+  type Difficulty,
   type Problem,
 } from "./problems";
 
@@ -19,6 +21,12 @@ type ProblemPickerProps = {
 };
 
 const MODES = Object.keys(REALTIME_MODELS) as InterviewMode[];
+
+const DIFFICULTY_STYLE: Record<Difficulty, string> = {
+  Easy: "bg-emerald-500/10 text-emerald-400",
+  Medium: "bg-amber-500/10 text-amber-400",
+  Hard: "bg-rose-500/10 text-rose-400",
+};
 
 function matches(p: Problem, q: string): boolean {
   if (!q) return true;
@@ -42,66 +50,83 @@ export function ProblemPicker({ onStart }: ProblemPickerProps) {
   );
 
   return (
-    <div className="mx-auto flex w-full max-w-xl flex-col gap-4">
+    <div className="mx-auto flex w-full max-w-2xl flex-col gap-5">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          loop · DSA voice interview
+        <h1 className="text-3xl font-semibold tracking-tight">
+          <span className="bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
+            loop
+          </span>
+          <span className="text-neutral-400"> · DSA voice interviews</span>
         </h1>
-        <p className="mt-1 text-sm text-neutral-400">
-          Choose your interviewer, then click a problem to begin.
+        <p className="mt-2 text-sm text-neutral-400">
+          Talk through a problem out loud with an AI interviewer — it listens,
+          probes your reasoning, and watches your code as you write it.
         </p>
       </header>
 
-      <div className="flex flex-col gap-2 text-sm">
-        <span className="text-neutral-300">Interviewer</span>
-        <div className="flex gap-2">
+      <div className="flex flex-col gap-2">
+        <span className="text-xs uppercase tracking-wide text-neutral-500">
+          Interviewer model
+        </span>
+        <div className="grid gap-2 sm:grid-cols-2">
           {MODES.map((m) => (
             <button
               key={m}
               type="button"
               onClick={() => setMode(m)}
-              className={`rounded-md border px-3 py-1.5 text-sm ${
+              className={`rounded-xl border p-3 text-left transition-colors ${
                 mode === m
-                  ? "border-blue-500 bg-blue-600/20 text-blue-200"
-                  : "border-neutral-700 text-neutral-300 hover:bg-neutral-800"
+                  ? "border-blue-500/70 bg-blue-600/10"
+                  : "border-neutral-800 bg-neutral-900/40 hover:border-neutral-700 hover:bg-neutral-900"
               }`}
             >
-              {MODE_LABELS[m]}
+              <span
+                className={`block text-sm font-medium ${
+                  mode === m ? "text-blue-200" : "text-neutral-200"
+                }`}
+              >
+                {MODE_LABELS[m]}
+              </span>
+              <span className="mt-1 block text-xs leading-relaxed text-neutral-500">
+                {MODE_DESCRIPTIONS[m]}
+              </span>
             </button>
           ))}
         </div>
       </div>
 
-      <input
-        type="search"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search problems — title, category, difficulty…"
-        className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-500"
-      />
-
-      <label className="flex items-center gap-2 text-sm text-neutral-300">
+      <div className="flex flex-col gap-2">
         <input
-          type="checkbox"
-          checked={includeOpen}
-          onChange={(e) => setIncludeOpen(e.target.checked)}
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search problems — title, category, difficulty…"
+          className="rounded-lg border border-neutral-800 bg-neutral-900/60 px-3.5 py-2.5 text-sm text-neutral-100 outline-none placeholder:text-neutral-600 focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/20"
         />
-        Include open-dataset problems ({OPEN_PROBLEMS.length}, community ·
-        competitive-style)
-      </label>
+        <div className="flex items-center justify-between text-xs text-neutral-500">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={includeOpen}
+              onChange={(e) => setIncludeOpen(e.target.checked)}
+              className="accent-blue-500"
+            />
+            Include open-dataset problems ({OPEN_PROBLEMS.length},
+            competitive-style)
+          </label>
+          <span>
+            {total} problem{total === 1 ? "" : "s"} · click one to start
+          </span>
+        </div>
+      </div>
 
-      <p className="text-xs text-neutral-500">
-        {total} problem{total === 1 ? "" : "s"} · click one to start the
-        interview
-      </p>
-
-      <div className="max-h-[28rem] overflow-y-auto rounded-md border border-neutral-800">
+      <div className="max-h-[26rem] overflow-y-auto rounded-xl border border-neutral-800 bg-neutral-900/30">
         {total === 0 ? (
           <p className="p-4 text-sm text-neutral-500">No problems match.</p>
         ) : (
           groups.map(([category, problems]) => (
             <div key={category}>
-              <div className="sticky top-0 bg-neutral-900 px-3 py-1.5 text-xs uppercase tracking-wide text-neutral-500">
+              <div className="sticky top-0 border-b border-neutral-800/60 bg-neutral-900 px-4 py-1.5 text-[11px] font-medium uppercase tracking-wider text-neutral-500">
                 {category}
               </div>
               {problems.map((p) => (
@@ -109,12 +134,19 @@ export function ProblemPicker({ onStart }: ProblemPickerProps) {
                   key={p.id}
                   type="button"
                   onClick={() => onStart(p, mode)}
-                  className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-blue-600/20 hover:text-blue-100"
+                  className="group flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm text-neutral-300 transition-colors hover:bg-blue-600/10 hover:text-blue-100"
                 >
                   <span>{p.title}</span>
-                  <span className="flex items-center gap-2 text-xs text-neutral-500">
-                    {p.difficulty}
-                    <span aria-hidden className="text-neutral-600">
+                  <span className="flex items-center gap-2">
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${DIFFICULTY_STYLE[p.difficulty]}`}
+                    >
+                      {p.difficulty}
+                    </span>
+                    <span
+                      aria-hidden
+                      className="text-neutral-600 transition-transform group-hover:translate-x-0.5 group-hover:text-blue-300"
+                    >
                       ›
                     </span>
                   </span>

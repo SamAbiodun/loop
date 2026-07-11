@@ -2,11 +2,15 @@ export {
   SESSION_ENDPOINT,
   REALTIME_MODELS,
   MODE_LABELS,
+  MODE_DESCRIPTIONS,
   DEFAULT_MODE,
   SESSION_CAP_MINUTES,
   INTERVIEWER_VOICE,
   VAD_EAGERNESS,
   NOISE_REDUCTION,
+  NOISE_GATE_DB,
+  TRANSCRIPTION,
   INTERRUPT_RESPONSE,
   type InterviewMode,
 } from "./config";
+export { createGatedMic, type GatedMic } from "./micGate";
