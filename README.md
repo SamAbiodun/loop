@@ -43,6 +43,11 @@ src/
   app/
     api/session/route.ts     POST /api/session — mints an ephemeral Realtime client secret
     api/run/route.ts         POST /api/run — executes editor code via a public runner
+    api/unlock/route.ts      POST /api/unlock — validate an access code, set the gate cookie
+    api/usage/route.ts       POST /api/usage — record voice seconds against a code (beacon)
+    api/admin/unlock         admin sign-in
+    api/admin/codes          list / generate / enable-disable / delete access codes
+    admin/page.tsx           the /admin access-code dashboard
     layout.tsx page.tsx globals.css
   features/
     voice/                   generic realtime config
@@ -59,8 +64,12 @@ src/
       CodeEditor.tsx           Monaco wrapper
       InterviewSurface.tsx     editor + run output + transcript + controls
       InterviewApp.tsx         pick → interview state machine
+    admin/AdminPanel.tsx     the access-code dashboard UI
   lib/
     env.ts                   validated, server-only env access
+    auth.ts                  gate mode (codes / passcode / open) + admin auth
+    codes.ts                 access-code records, generation, usage counters
+    kv.ts                    Upstash Redis store (in-memory fallback for dev)
 scripts/
   setup.sh                   one-shot setup for new clones
   build-problems.mjs         regenerate the opt-in open dataset (problems.open.json)
@@ -78,14 +87,30 @@ Pages) won't work.
 | Variable         | Required | Purpose                                                                 |
 | ---------------- | -------- | ----------------------------------------------------------------------- |
 | `OPENAI_API_KEY` | yes      | Realtime API access + credit. Never shipped to the browser.             |
-| `APP_PASSCODE`   | prod     | Shared passcode gate. **Unset = fully open.** Set it in production so a public URL can't drain your OpenAI credit. |
+| `ADMIN_PASSCODE` | prod     | Turns on the **multi-code** access system and guards `/admin`. Set this in production so a public URL can't drain your OpenAI credit. |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | prod | Where access codes + usage live. Auto-injected by the Upstash Vercel integration. Without them the code store falls back to non-persistent in-memory (resets on redeploy). |
+| `APP_PASSCODE`   | no       | Legacy single-passcode fallback, used only when `ADMIN_PASSCODE` is unset. No usage tracking. |
 
-**Passcode gate.** When `APP_PASSCODE` is set, visitors see an unlock screen, and
-`/api/session` / `/api/run` reject any request without a valid gate cookie — so
-the protection is server-side, not just the UI. The cookie is an httpOnly hash
-of the passcode (the raw passcode never reaches the browser) and lasts 30 days.
-Share the passcode with anyone you want to let in. Leave `APP_PASSCODE` unset
-locally to run open on `localhost`.
+### Access codes (gate + usage + disable)
+
+When `ADMIN_PASSCODE` is set the app runs in **codes mode**: visitors must
+enter a valid access code, and `/api/session` / `/api/run` reject any request
+without one. Enforcement is server-side (an httpOnly cookie holding the code),
+and the code is **re-checked on every request** — so disabling a code locks its
+holder out immediately, even mid-visit.
+
+Manage codes at **`/admin`** (sign in with `ADMIN_PASSCODE`):
+
+- **Generate** a new code with a label (e.g. "Recruiter — Acme"). Share the
+  generated code with whoever you want to let in.
+- See per-code **usage**: sessions started, code runs, estimated voice minutes
+  (the OpenAI cost driver), and last-used time.
+- **Enable/disable** any code with one click, or delete it.
+
+Codes and counters persist in **Upstash Redis** — add it from the Vercel
+Marketplace (free tier) and it injects the two `UPSTASH_REDIS_REST_*` vars
+automatically. Locally, leave everything unset to run fully open; set
+`ADMIN_PASSCODE` alone to exercise the panel against the in-memory store.
 
 **Custom domain / DNS.** Add `loop.samabiodun.tech` in Vercel's Domains tab, then
 create the record it shows at your registrar (a `CNAME` from `loop` →
