@@ -67,6 +67,31 @@ scripts/
   repro-session.mjs          headless smoke test of the voice session
 ```
 
+## Deploying
+
+Deployed at **https://loop.samabiodun.tech** (Vercel). It needs a Node host — the
+`/api/session` and `/api/run` routes run server-side — so static hosting (GitHub
+Pages) won't work.
+
+**Environment variables** (Vercel → Project → Settings → Environment Variables):
+
+| Variable         | Required | Purpose                                                                 |
+| ---------------- | -------- | ----------------------------------------------------------------------- |
+| `OPENAI_API_KEY` | yes      | Realtime API access + credit. Never shipped to the browser.             |
+| `APP_PASSCODE`   | prod     | Shared passcode gate. **Unset = fully open.** Set it in production so a public URL can't drain your OpenAI credit. |
+
+**Passcode gate.** When `APP_PASSCODE` is set, visitors see an unlock screen, and
+`/api/session` / `/api/run` reject any request without a valid gate cookie — so
+the protection is server-side, not just the UI. The cookie is an httpOnly hash
+of the passcode (the raw passcode never reaches the browser) and lasts 30 days.
+Share the passcode with anyone you want to let in. Leave `APP_PASSCODE` unset
+locally to run open on `localhost`.
+
+**Custom domain / DNS.** Add `loop.samabiodun.tech` in Vercel's Domains tab, then
+create the record it shows at your registrar (a `CNAME` from `loop` →
+`cname.vercel-dns.com`). The root `samabiodun.tech` is untouched — it stays on
+GitHub Pages.
+
 ## Notes
 
 - `reactStrictMode` is **off** (`next.config.ts`): the RealtimeSession (WebRTC + mic) is created once per interview mount, and Strict Mode's dev double-mount would tear it down mid-handshake.
