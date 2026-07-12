@@ -28,6 +28,12 @@ const ACTIVITY_COLOR: Record<string, string> = {
 
 const CAP_MS = SESSION_CAP_MINUTES * 60_000;
 
+// Editor-state updates we silently push into the session so the interviewer
+// always sees the live code (and run output) without being asked. Prefixed so
+// they can be filtered out of the visible transcript and recognized by the
+// model as silent context (see prompts.ts EDITOR AWARENESS).
+const EDITOR_SYNC_PREFIX = "[EDITOR]";
+
 /** Flatten the realtime conversation history into a readable transcript. */
 function buildTranscript(items: unknown[]): string {
   const lines: string[] = [];
@@ -55,7 +61,9 @@ function buildTranscript(items: unknown[]): string {
       )
       .join("")
       .trim();
-    if (text) lines.push(`${who}: ${text}`);
+    // Skip the silent editor-sync messages — they're context for the model,
+    // not part of the spoken conversation.
+    if (text && !text.startsWith(EDITOR_SYNC_PREFIX)) lines.push(`${who}: ${text}`);
   }
   return lines.join("\n\n");
 }
@@ -154,6 +162,35 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       capMinutes: SESSION_CAP_MINUTES,
     };
   }, []);
+
+  // Push the live editor state (and run output) into the session as silent
+  // context so the interviewer always sees the code without being asked.
+  // triggerResponse:false means it never makes the interviewer start talking.
+  const lastSyncRef = useRef<string>("");
+  const pushEditorState = useCallback((body: string) => {
+    const session = sessionRef.current;
+    if (!session) return;
+    try {
+      session.transport.sendMessage(body, {}, { triggerResponse: false });
+    } catch {
+      // transport not connected yet — ignore
+    }
+  }, []);
+
+  // A few seconds after the candidate stops typing, sync the current code to
+  // the interviewer (only when it actually changed, and only while live).
+  useEffect(() => {
+    if (status !== "live") return;
+    const t = setTimeout(() => {
+      if (code === lastSyncRef.current) return;
+      lastSyncRef.current = code;
+      const body = code.trim().length ? code : "(empty)";
+      pushEditorState(
+        `${EDITOR_SYNC_PREFIX} The candidate's ${language} editor now contains:\n\`\`\`\n${body}\n\`\`\``,
+      );
+    }, 3000);
+    return () => clearTimeout(t);
+  }, [code, language, status, pushEditorState]);
 
   const finishInterview = useCallback(() => {
     flushUsage();
@@ -387,6 +424,13 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
         .join("\n")
         .trimEnd();
       setOutput(text || "(no output)");
+      // Let the interviewer see what was run and what it produced.
+      if (status === "live") {
+        lastSyncRef.current = code;
+        pushEditorState(
+          `${EDITOR_SYNC_PREFIX} The candidate ran their code. Editor (${language}):\n\`\`\`\n${code}\n\`\`\`\nOutput:\n${text || "(no output)"}`,
+        );
+      }
     } catch (e) {
       setOutput(e instanceof Error ? e.message : String(e));
     } finally {
