@@ -10,6 +10,7 @@ import {
   INTERVIEWER_VOICE,
   NOISE_REDUCTION,
   REALTIME_MODELS,
+  SESSION_CAP_MINUTES,
   TRANSCRIPTION,
   VAD_EAGERNESS,
   type InterviewMode,
@@ -21,8 +22,10 @@ import {
   createEditCodeTool,
   createEndTool,
   createGetEditorStateTool,
+  createGetTimeTool,
   createHintTool,
   type EditorState,
+  type TimeState,
 } from "./tools";
 
 type InterviewSessionOptions = {
@@ -32,6 +35,8 @@ type InterviewSessionOptions = {
    *  the default microphone itself (fallback when mic access fails early). */
   micStream?: MediaStream;
   getEditorState: () => EditorState;
+  /** Live session-clock state so the interviewer can pace itself. */
+  getTimeRemaining: () => TimeState;
   onHintRequested: () => void;
   onEndSession: () => void;
   onEditCode: (code: string) => void;
@@ -47,6 +52,7 @@ export function createInterviewSession({
   mode,
   micStream,
   getEditorState,
+  getTimeRemaining,
   onHintRequested,
   onEndSession,
   onEditCode,
@@ -59,10 +65,12 @@ export function createInterviewSession({
       problem,
       code,
       languageLabel(language),
+      SESSION_CAP_MINUTES,
     ),
     voice: INTERVIEWER_VOICE,
     tools: [
       createGetEditorStateTool(getEditorState),
+      createGetTimeTool(getTimeRemaining),
       createHintTool(onHintRequested),
       createEditCodeTool(onEditCode),
       createEndTool(onEndSession),
