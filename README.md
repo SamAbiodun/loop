@@ -111,18 +111,26 @@ commands — lives under [Deploying](#deploying)):
 
 ### Deploying updates
 
-Deploys are done with the **Vercel CLI** from a checkout of `dev`:
+The Vercel project is connected to this GitHub repo with **production branch =
+`main`**, so deploys are driven by git:
+
+- **`main` → production.** Merging/pushing to `main` builds and deploys to
+  production, and aliases `loop.samabiodun.tech`.
+- **`dev` and PR branches → preview.** Each push gets its own preview URL
+  (protected by Vercel deployment auth — only you can open it).
+
+Release flow: branch off `dev` → PR into `dev` → when ready, promote `dev` to
+`main` to ship:
 
 ```bash
-git switch dev && git pull      # get the latest merged code
-vercel --prod                   # build on Vercel + promote to production
+git push origin origin/dev:main   # fast-forward main to dev = production deploy
 ```
 
 `ADMIN_PASSCODE` / `OPENAI_API_KEY` / `UPSTASH_*` are stored on the Vercel
-project, so they persist across deploys; changing an env var needs a fresh
-`vercel --prod` (or a redeploy) to take effect. To switch to **auto-deploy on
-push to `dev`** instead, connect the GitHub repo under Vercel → Project →
-Settings → Git.
+project and persist across deploys; changing an env var needs a redeploy to take
+effect. For preview deploys (`dev`/PRs) to be fully functional, scope those env
+vars to **Preview** as well as Production. Manual CLI deploys (`vercel --prod`)
+still work as a fallback.
 
 **Environment variables** (Vercel → Project → Settings → Environment Variables — all set in production):
 
