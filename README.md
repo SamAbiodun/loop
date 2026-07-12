@@ -9,7 +9,7 @@ A browser app for practising **data-structures & algorithms interviews out loud*
 - **Voice-first mock interview** — speech-to-speech via OpenAI Realtime (WebRTC), with a 5-phase interviewer (clarify → approach → code → test → analyze).
 - **NeetCode 150** problem bank, original statements with worked examples, grouped by category and **searchable**, plus an opt-in pool from the open APPS dataset.
 - **Monaco code editor** — per-language starters and buffers, a **Run ▶** panel that executes your code, and interviewer tools to read the live editor state and write into it.
-- **Cost controls** — a model toggle (**Practice** = `gpt-realtime-mini`, the cheaper default; **Hard** = `gpt-realtime-2`), a concise interviewer prompt, and a 30-minute session cap.
+- **Cost controls** — a model toggle (**Practice** = `gpt-realtime-2.1-mini`, the cheaper default; **Hard** = `gpt-realtime-2.1`), a concise interviewer prompt, and a 30-minute session cap.
 
 ## Prerequisites
 
