@@ -132,6 +132,29 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
     }
   }, []);
 
+  // Start of the session clock (the cap timer), mirrored in a ref so the
+  // interviewer's get_time_remaining tool — captured once at session creation —
+  // reads the live value rather than a stale snapshot.
+  const startedAtRef = useRef<number | null>(null);
+  const getTimeRemaining = useCallback(() => {
+    const started = startedAtRef.current;
+    if (started === null) {
+      return {
+        started: false,
+        minutesRemaining: SESSION_CAP_MINUTES,
+        minutesElapsed: 0,
+        capMinutes: SESSION_CAP_MINUTES,
+      };
+    }
+    const elapsedMin = (Date.now() - started) / 60000;
+    return {
+      started: true,
+      minutesRemaining: Math.max(0, Math.ceil(SESSION_CAP_MINUTES - elapsedMin)),
+      minutesElapsed: Math.floor(elapsedMin),
+      capMinutes: SESSION_CAP_MINUTES,
+    };
+  }, []);
+
   const finishInterview = useCallback(() => {
     flushUsage();
     sessionRef.current?.close();
@@ -184,6 +207,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
         mode,
         micStream: mic?.stream,
         getEditorState: () => editorStateRef.current,
+        getTimeRemaining,
         onHintRequested: () => setHints((h) => h + 1),
         onEndSession: finishInterview,
         onEditCode: setCode,
@@ -211,7 +235,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       sessionRef.current = null;
       micRef.current = null;
     };
-  }, [problem, mode, setCode, finishInterview]);
+  }, [problem, mode, setCode, finishInterview, getTimeRemaining]);
 
   // Live-adjust the gate threshold from the header slider.
   useEffect(() => {
@@ -273,6 +297,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       await session.connect({ apiKey: value, model: REALTIME_MODELS[mode] });
       setStatus("live");
       setStartedAt(Date.now());
+      startedAtRef.current = Date.now();
       liveSinceRef.current = Date.now();
       // Treat the greeting as already in flight: the half-duplex effect keys
       // off `speaking`, so this keeps the mic closed from the very first live
