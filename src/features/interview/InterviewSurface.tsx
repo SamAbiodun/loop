@@ -8,6 +8,7 @@ import {
   REALTIME_MODELS,
   SESSION_CAP_MINUTES,
   SESSION_ENDPOINT,
+  VAD_EAGERNESS,
   createGatedMic,
   type GatedMic,
   type InterviewMode,
@@ -90,6 +91,11 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   const [showTranscript, setShowTranscript] = useState(false);
   const [micReady, setMicReady] = useState(false);
   const [gateDb, setGateDb] = useState(NOISE_GATE_DB);
+  // Barge-in: when on, the mic stays live while the interviewer talks so the
+  // candidate can cut in (and the model interrupts itself to yield). Off by
+  // default because on speakers the interviewer's echo can self-interrupt —
+  // only reliable on headphones / with good echo cancellation.
+  const [bargeIn, setBargeIn] = useState(false);
 
   // Each language keeps its own editor buffer, so switching languages shows
   // that language's default starter the first time and restores prior work on
@@ -356,12 +362,35 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
 
   // Half-duplex: keep the mic muted while the interviewer is speaking (so its
   // own voice / room echo can't leak in and get mistaken for the candidate),
-  // and whenever the candidate has manually muted. The mic is only live when the
-  // interviewer is silent and the candidate hasn't muted.
+  // and whenever the candidate has manually muted. When barge-in is ON we keep
+  // the mic live during the interviewer's turn so the candidate can cut in.
   useEffect(() => {
     if (status !== "live") return;
-    sessionRef.current?.mute(manualMuted || speaking);
-  }, [manualMuted, speaking, status]);
+    sessionRef.current?.mute(manualMuted || (speaking && !bargeIn));
+  }, [manualMuted, speaking, status, bargeIn]);
+
+  // Apply barge-in live: flip the server VAD's interruptResponse so the
+  // interviewer stops when the candidate speaks over it (works without a
+  // reconnect). Mirrors the turn-detection config set at session creation.
+  useEffect(() => {
+    if (status !== "live") return;
+    try {
+      sessionRef.current?.transport.updateSessionConfig({
+        audio: {
+          input: {
+            turnDetection: {
+              type: "semantic_vad",
+              eagerness: VAD_EAGERNESS,
+              createResponse: true,
+              interruptResponse: bargeIn,
+            },
+          },
+        },
+      });
+    } catch {
+      // transport not ready — the create-time config still applies
+    }
+  }, [bargeIn, status]);
 
   // Safety net: if an audio_stopped event is ever missed, never leave the mic
   // stuck muted — force "speaking" off after a turn could plausibly last.
@@ -544,6 +573,20 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
               }`}
             >
               {manualMuted ? "🔇 Muted" : "🎤 Mute"}
+            </button>
+          )}
+          {isLive && (
+            <button
+              type="button"
+              onClick={() => setBargeIn((b) => !b)}
+              title="Barge-in: let yourself talk over the interviewer (it stops and yields). Best on headphones — on speakers its own voice may interrupt it."
+              className={`rounded-md border px-3 py-1.5 text-sm ${
+                bargeIn
+                  ? "border-blue-600 bg-blue-600/20 text-blue-200"
+                  : "border-neutral-600 text-neutral-400 hover:bg-neutral-800"
+              }`}
+            >
+              {bargeIn ? "⇄ Barge-in on" : "⇄ Barge-in off"}
             </button>
           )}
           {isLive && (
