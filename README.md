@@ -78,11 +78,34 @@ scripts/
 
 ## Deploying
 
-Deployed at **https://loop.samabiodun.tech** (Vercel). It needs a Node host — the
-`/api/session` and `/api/run` routes run server-side — so static hosting (GitHub
-Pages) won't work.
+**Live at [https://loop.samabiodun.tech](https://loop.samabiodun.tech).**
 
-**Environment variables** (Vercel → Project → Settings → Environment Variables):
+- **Host:** Vercel, project **`loop-interview`** (org `samuel-abioduns-projects-962679c9`).
+  Chosen because the app needs a Node host — `/api/session` (mints the ephemeral
+  OpenAI key), `/api/run`, and the admin/usage routes run server-side — so
+  static hosting (GitHub Pages) can't serve it. Vercel's free tier covers it.
+- **Database:** Upstash Redis (Vercel Marketplace integration), holding access
+  codes + usage counters. See [Access codes](#access-codes-gate--usage--disable).
+- **Domain/DNS:** `loop.samabiodun.tech` — a subdomain. The root
+  `samabiodun.tech` is the separate portfolio site and is untouched. DNS is
+  managed in **Cloudflare** (see [Custom domain / DNS](#custom-domain--dns)).
+
+### Deploying updates
+
+Deploys are done with the **Vercel CLI** from a checkout of `dev`:
+
+```bash
+git switch dev && git pull      # get the latest merged code
+vercel --prod                   # build on Vercel + promote to production
+```
+
+`ADMIN_PASSCODE` / `OPENAI_API_KEY` / `UPSTASH_*` are stored on the Vercel
+project, so they persist across deploys; changing an env var needs a fresh
+`vercel --prod` (or a redeploy) to take effect. To switch to **auto-deploy on
+push to `dev`** instead, connect the GitHub repo under Vercel → Project →
+Settings → Git.
+
+**Environment variables** (Vercel → Project → Settings → Environment Variables — all set in production):
 
 | Variable         | Required | Purpose                                                                 |
 | ---------------- | -------- | ----------------------------------------------------------------------- |
@@ -112,10 +135,31 @@ Marketplace (free tier) and it injects the two `UPSTASH_REDIS_REST_*` vars
 automatically. Locally, leave everything unset to run fully open; set
 `ADMIN_PASSCODE` alone to exercise the panel against the in-memory store.
 
-**Custom domain / DNS.** Add `loop.samabiodun.tech` in Vercel's Domains tab, then
-create the record it shows at your registrar (a `CNAME` from `loop` →
-`cname.vercel-dns.com`). The root `samabiodun.tech` is untouched — it stays on
-GitHub Pages.
+### Custom domain / DNS
+
+The domain is attached in Vercel (`vercel domains add loop.samabiodun.tech
+loop-interview`, or the Domains tab). DNS for `samabiodun.tech` is managed in
+**Cloudflare** — the registrar (orderbox) delegates its nameservers to
+Cloudflare (`*.ns.cloudflare.com`), so records live in the Cloudflare
+dashboard, **not** the registrar panel.
+
+The record for the subdomain (Cloudflare → `samabiodun.tech` → DNS → Records):
+
+| Type | Name | Target | Proxy |
+| ---- | ---- | ------ | ----- |
+| CNAME | `loop` | `cname.vercel-dns.com` | **DNS only (grey cloud)** |
+
+**Grey cloud is required** — Cloudflare's orange-cloud proxy terminates TLS
+itself and breaks Vercel's cert (`ERR_SSL_UNRECOGNIZED_NAME_ALERT`). Vercel
+auto-issues the Let's Encrypt cert once it sees the record; a freshly-issued
+cert can take up to ~an hour to propagate across all edge PoPs (the
+`…vercel.app` URL works immediately meanwhile). The root `samabiodun.tech`
+(portfolio) and its records are untouched.
+
+> **Domain email note:** the domain isn't set up to send/receive mail. If you
+> add email later (e.g. Cloudflare Email Routing to forward inbound, or Zoho
+> for a real mailbox), do **not** apply a "sends no email" `v=spf1 -all`
+> lockdown — the mail provider needs its own SPF/MX records.
 
 ## Notes
 
