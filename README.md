@@ -76,6 +76,25 @@ scripts/
   repro-session.mjs          headless smoke test of the voice session
 ```
 
+## Architecture & design decisions
+
+The stack, and *why* each piece was chosen (the **how** — setup, env vars,
+commands — lives under [Deploying](#deploying)):
+
+| Layer | Choice | Why |
+| ----- | ------ | --- |
+| **Framework** | Next.js (App Router) + TypeScript | One project for the UI **and** the server-side API routes it needs, deployed as a unit. The routes exist so the OpenAI key and code-runner never touch the browser. |
+| **Hosting** | **Vercel** (project `loop-interview`) | First-class Next.js host with a Node runtime for the API routes — static hosting (e.g. GitHub Pages) can't run them. Free tier. Deployed via the Vercel CLI (`vercel --prod`). |
+| **Voice** | OpenAI Realtime via [`@openai/agents`](https://github.com/openai/openai-agents-js) (`RealtimeAgent`/`RealtimeSession`) over WebRTC | Speech-to-speech with browser-native audio. `/api/session` mints a short-lived **ephemeral** client secret so the real API key never reaches the browser. |
+| **Editor** | Monaco (`@monaco-editor/react`) | VS Code-grade editing; per-language buffers and starters. |
+| **Code runner** | Paiza.io, proxied via `/api/run` | Runs arbitrary candidate code without us hosting a sandbox; Paiza's guest API is free and needs no signup. (Piston, the original pick, went whitelist-only in Feb 2026.) Trade-off: code is sent to a third-party public service. |
+| **Access control** | Multi-code gate + `/admin` dashboard | A public URL can't be allowed to drain OpenAI credit. Instead of one shared password, there are **labelled access codes** with per-code usage (sessions / runs / voice-minutes) and one-click disable. Enforced server-side and re-checked every request, so revocation is instant. See [Access codes](#access-codes-gate--usage--disable). |
+| **Database** | **Upstash Redis** (Vercel Marketplace integration) | The access codes + usage counters need persistent, mutable, low-latency state — a natural fit for serverless Redis (KV + atomic counters + flags), on a free tier, auto-wired into Vercel. Postgres would be overkill for a handful of codes. Falls back to a non-persistent in-memory store when no Redis is configured (local dev only). |
+| **Admin dashboard** | `/admin`, gated by `ADMIN_PASSCODE` | Web UI to generate labelled codes, watch per-code usage, and enable/disable/delete — manageable from any device, no redeploys. Codes-mode is tied to `ADMIN_PASSCODE` on purpose: codes can only be minted here, so without it the gate would lock everyone out. |
+| **Domain / DNS** | `loop.samabiodun.tech`, DNS on **Cloudflare** | A subdomain, so the root `samabiodun.tech` portfolio is untouched. Grey-cloud (DNS-only) CNAME → Vercel; see [Custom domain / DNS](#custom-domain--dns). |
+
+`reactStrictMode` is off — see [Notes](#notes) for why.
+
 ## Deploying
 
 **Live at [https://loop.samabiodun.tech](https://loop.samabiodun.tech).**
