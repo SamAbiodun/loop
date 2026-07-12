@@ -3,12 +3,14 @@
 export const SESSION_ENDPOINT = "/api/session";
 
 /**
- * Cost vs quality. mini is several times cheaper and the default; gpt-realtime-2
- * is "hard mode". Both confirmed on the account.
+ * Cost vs quality. mini is ~3x cheaper on audio ($10/$20 vs $32/$64 per 1M
+ * tokens) and is the default; the flagship is "hard mode". On the 2.1 line:
+ * 2.1-mini is a distilled reasoning model (tool use + better alphanumeric
+ * recognition) at the same mini price as the older gpt-realtime-mini.
  */
 export const REALTIME_MODELS = {
-  practice: "gpt-realtime-mini",
-  hard: "gpt-realtime-2",
+  practice: "gpt-realtime-2.1-mini",
+  hard: "gpt-realtime-2.1",
 } as const;
 
 export type InterviewMode = keyof typeof REALTIME_MODELS;
@@ -21,8 +23,8 @@ export const MODE_LABELS: Record<InterviewMode, string> = {
 };
 
 export const MODE_DESCRIPTIONS: Record<InterviewMode, string> = {
-  practice: "gpt-realtime-mini · quick and inexpensive — great for reps",
-  hard: "gpt-realtime-2 · probes harder and follows up better — costs more per minute",
+  practice: "gpt-realtime-2.1-mini · quick and inexpensive — great for reps",
+  hard: "gpt-realtime-2.1 · probes harder and follows up better — costs more per minute",
 };
 
 export const DEFAULT_MODE: InterviewMode = "practice";

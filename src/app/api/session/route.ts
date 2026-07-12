@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
     return new Response((error as Error).message, { status: 500 });
   }
 
-  let model = "gpt-realtime-mini";
+  let model = "gpt-realtime-2.1-mini";
   try {
     const body = await request.json();
     if (typeof body?.model === "string") model = body.model;
