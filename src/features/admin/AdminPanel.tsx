@@ -14,6 +14,14 @@ type CodeRecord = {
   lastUsed: string | null;
 };
 
+type AccessRequest = {
+  id: string;
+  name: string;
+  email: string;
+  note: string;
+  created: string;
+};
+
 type Gate = "checking" | "disabled" | "locked" | "authed";
 
 function fmtWhen(iso: string | null): string {
@@ -36,6 +44,15 @@ export function AdminPanel() {
   const [busy, setBusy] = useState(false);
   const [justCreated, setJustCreated] = useState<string | null>(null);
   const [persistent, setPersistent] = useState(true);
+  const [requests, setRequests] = useState<AccessRequest[]>([]);
+
+  const loadRequests = useCallback(async () => {
+    const res = await fetch("/api/admin/requests");
+    if (res.ok) {
+      const d = (await res.json()) as { requests: AccessRequest[] };
+      setRequests(d.requests);
+    }
+  }, []);
 
   const loadCodes = useCallback(async () => {
     const res = await fetch("/api/admin/codes");
@@ -44,7 +61,24 @@ export function AdminPanel() {
       setCodes(d.codes);
       setPersistent(d.persistent);
     }
-  }, []);
+    void loadRequests();
+  }, [loadRequests]);
+
+  async function dismissRequest(id: string) {
+    setRequests((rs) => rs.filter((r) => r.id !== id));
+    await fetch("/api/admin/requests", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+  }
+
+  function fillFromRequest(r: AccessRequest) {
+    setLabel(`${r.name} — ${r.email}`);
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
 
   useEffect(() => {
     fetch("/api/admin/unlock")
@@ -177,6 +211,55 @@ export function AdminPanel() {
         <div className="mb-4 rounded-lg border border-amber-700/50 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
           ⚠ No Redis configured — codes live in memory and reset on restart/redeploy.
           Add the Upstash integration on Vercel to persist them.
+        </div>
+      )}
+
+      {requests.length > 0 && (
+        <div className="mb-6 rounded-xl border border-blue-800/50 bg-blue-950/20">
+          <div className="border-b border-blue-800/40 px-3 py-2 text-xs font-medium uppercase tracking-wider text-blue-300">
+            Access requests · {requests.length}
+          </div>
+          <ul className="divide-y divide-blue-900/40">
+            {requests.map((r) => (
+              <li
+                key={r.id}
+                className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2.5 text-sm"
+              >
+                <span className="font-medium text-neutral-100">{r.name}</span>
+                <a
+                  href={`mailto:${r.email}`}
+                  className="text-blue-300 hover:underline"
+                >
+                  {r.email}
+                </a>
+                {r.note && (
+                  <span className="text-neutral-400">— {r.note}</span>
+                )}
+                <span className="text-xs text-neutral-600">
+                  {fmtWhen(r.created)}
+                </span>
+                <span className="ml-auto flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => fillFromRequest(r)}
+                    className="rounded-md border border-blue-600/50 bg-blue-600/15 px-2 py-0.5 text-xs text-blue-200 hover:bg-blue-600/25"
+                  >
+                    Use as label
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => dismissRequest(r.id)}
+                    className="text-xs text-neutral-500 hover:text-rose-400"
+                  >
+                    dismiss
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="px-3 py-2 text-xs text-neutral-600">
+            Generate a code below, share it, then dismiss the request.
+          </p>
         </div>
       )}
 

@@ -356,8 +356,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
 
   // Half-duplex: keep the mic muted while the interviewer is speaking (so its
   // own voice / room echo can't leak in and get mistaken for the candidate),
-  // and whenever the candidate has manually muted. The mic is only live when the
-  // interviewer is silent and the candidate hasn't muted.
+  // and whenever the candidate has manually muted.
   useEffect(() => {
     if (status !== "live") return;
     sessionRef.current?.mute(manualMuted || speaking);
