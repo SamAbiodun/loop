@@ -21,7 +21,8 @@
  */
 import { createHash, timingSafeEqual } from "crypto";
 import type { NextRequest } from "next/server";
-import { codeIsValid } from "./codes";
+import { codeIsValid, normalizeCode } from "./codes";
+import { kvIsPersistent } from "./kv";
 
 export const GATE_COOKIE = "loop_gate";
 export const ADMIN_COOKIE = "loop_admin";
@@ -37,6 +38,14 @@ export function gateMode(): GateMode {
 /** Whether visitors must enter a passcode at all. */
 export function gateRequired(): boolean {
   return gateMode() !== "open";
+}
+
+/** Deployed codes mode must never silently use per-instance memory. */
+export function gateConfigurationError(): string | null {
+  if (gateMode() === "codes" && process.env.VERCEL && !kvIsPersistent()) {
+    return "Access-code storage is unavailable. Configure Upstash Redis for this Vercel environment.";
+  }
+  return null;
 }
 
 /** Constant-time compare for equal-length strings. */
@@ -57,7 +66,8 @@ export async function validatePasscode(passcode: string): Promise<string | null>
   if (mode === "open") return null;
   if (!passcode) return null;
   if (mode === "codes") {
-    return (await codeIsValid(passcode)) ? passcode : null;
+    const normalized = normalizeCode(passcode);
+    return (await codeIsValid(normalized)) ? normalized : null;
   }
   return safeEqual(passcode, process.env.APP_PASSCODE as string) ? passcode : null;
 }

@@ -27,6 +27,7 @@ const ACTIVITY_COLOR: Record<string, string> = {
 };
 
 const CAP_MS = SESSION_CAP_MINUTES * 60_000;
+const MAX_SYNC_OUTPUT_CHARS = 4_000;
 
 // Editor-state updates we silently push into the session so the interviewer
 // always sees the live code (and run output) without being asked. Prefixed so
@@ -120,9 +121,10 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
 
   const sessionRef = useRef<RealtimeSession | null>(null);
   const micRef = useRef<GatedMic | null>(null);
-  // Resolves once the mic + session exist; Start awaits it so clicking early
-  // can't race the async setup.
-  const readyRef = useRef<Promise<void>>(Promise.resolve());
+  const cleanupSessionListenersRef = useRef<() => void>(() => {});
+  const startingRef = useRef(false);
+  const closingRef = useRef(false);
+  const usageIdRef = useRef<string | null>(null);
 
   // Wall-clock start of the current live stretch. Set when the session goes
   // live, cleared when it ends — so we can report elapsed voice time (the
@@ -130,14 +132,29 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   const liveSinceRef = useRef<number | null>(null);
   const flushUsage = useCallback(() => {
     const since = liveSinceRef.current;
-    if (since === null) return;
+    const usageId = usageIdRef.current;
+    if (since === null || !usageId) return;
     liveSinceRef.current = null;
     const seconds = Math.round((Date.now() - since) / 1000);
     if (seconds > 0 && typeof navigator !== "undefined" && navigator.sendBeacon) {
-      // Beacon (not fetch) so it still sends during unload; cookies ride along
-      // so the server attributes the minutes to this visitor's access code.
-      navigator.sendBeacon("/api/usage", JSON.stringify({ seconds }));
+      navigator.sendBeacon(
+        "/api/usage",
+        JSON.stringify({ event: "final", usageId, seconds }),
+      );
     }
+  }, []);
+
+  const closeRealtime = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    cleanupSessionListenersRef.current();
+    cleanupSessionListenersRef.current = () => {};
+    sessionRef.current?.close();
+    micRef.current?.dispose();
+    sessionRef.current = null;
+    micRef.current = null;
+    setMicReady(false);
+    closingRef.current = false;
   }, []);
 
   // Start of the session clock (the cap timer), mirrored in a ref so the
@@ -163,9 +180,9 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
     };
   }, []);
 
-  // Push the live editor state (and run output) into the session as silent
-  // context so the interviewer always sees the code without being asked.
-  // triggerResponse:false means it never makes the interviewer start talking.
+  // Send a lightweight invalidation rather than repeatedly appending the full
+  // file to conversation history. The model can call get_editor_state for the
+  // authoritative contents when it needs to review the code.
   const lastSyncRef = useRef<string>("");
   const pushEditorState = useCallback((body: string) => {
     const session = sessionRef.current;
@@ -177,165 +194,156 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
     }
   }, []);
 
-  // A few seconds after the candidate stops typing, sync the current code to
-  // the interviewer (only when it actually changed, and only while live).
+  // A few seconds after the candidate stops typing, tell the interviewer that
+  // its editor view changed without inflating context with full-file snapshots.
   useEffect(() => {
     if (status !== "live") return;
     const t = setTimeout(() => {
-      if (code === lastSyncRef.current) return;
-      lastSyncRef.current = code;
-      const body = code.trim().length ? code : "(empty)";
+      const signature = `${language}\0${code}`;
+      if (signature === lastSyncRef.current) return;
+      lastSyncRef.current = signature;
       pushEditorState(
-        `${EDITOR_SYNC_PREFIX} The candidate's ${language} editor now contains:\n\`\`\`\n${body}\n\`\`\``,
+        `${EDITOR_SYNC_PREFIX} The candidate updated the ${language} editor. Call get_editor_state before reviewing or testing it.`,
       );
-    }, 3000);
+    }, 4000);
     return () => clearTimeout(t);
   }, [code, language, status, pushEditorState]);
 
   const finishInterview = useCallback(() => {
     flushUsage();
-    sessionRef.current?.close();
+    closeRealtime();
     setSpeaking(false);
     setStatus("idle");
     setEnded(true);
-  }, [flushUsage]);
-
-  // The session owns the WebRTC connection. It's an external system, so it's
-  // created (and its events subscribed) in a mount effect and reached through
-  // sessionRef from handlers. One session per mount — the component is keyed
-  // by problem id in InterviewApp, so a new problem gets a fresh session.
-  // The mic is acquired here too (not at Start) so the permission prompt and
-  // device warm-up are already done when the candidate clicks Start.
-  useEffect(() => {
-    let cancelled = false;
-    let mic: GatedMic | null = null;
-    let session: RealtimeSession | null = null;
-
-    const onHistory = (items: unknown[]) => setTranscript(buildTranscript(items));
-    const onAudioStart = () => setSpeaking(true);
-    const onAudioStopped = () => setSpeaking(false);
-    const onErr = (e: unknown) => {
-      setSpeaking(false);
-      const err = e as { error?: { message?: string }; message?: string };
-      setError(
-        typeof e === "string"
-          ? e
-          : (err?.error?.message ?? err?.message ?? "Voice session error"),
-      );
-    };
-
-    readyRef.current = (async () => {
-      try {
-        mic = await createGatedMic(NOISE_GATE_DB);
-      } catch {
-        // Mic blocked or unavailable — fall back to the transport's own
-        // capture (no gate); the browser will prompt again on connect.
-        mic = null;
-      }
-      if (cancelled) {
-        mic?.dispose();
-        return;
-      }
-      micRef.current = mic;
-      setMicReady(mic !== null);
-
-      session = createInterviewSession({
-        problem,
-        mode,
-        micStream: mic?.stream,
-        getEditorState: () => editorStateRef.current,
-        getTimeRemaining,
-        onHintRequested: () => setHints((h) => h + 1),
-        onEndSession: finishInterview,
-        onEditCode: setCode,
-      });
-      sessionRef.current = session;
-
-      session.on("history_updated", onHistory);
-      session.on("audio_start", onAudioStart);
-      session.on("audio_stopped", onAudioStopped);
-      session.on("audio_interrupted", onAudioStopped);
-      session.on("error", onErr);
-    })();
-
-    return () => {
-      cancelled = true;
-      if (session) {
-        session.off("history_updated", onHistory);
-        session.off("audio_start", onAudioStart);
-        session.off("audio_stopped", onAudioStopped);
-        session.off("audio_interrupted", onAudioStopped);
-        session.off("error", onErr);
-        session.close();
-      }
-      mic?.dispose();
-      sessionRef.current = null;
-      micRef.current = null;
-    };
-  }, [problem, mode, setCode, finishInterview, getTimeRemaining]);
+  }, [closeRealtime, flushUsage]);
 
   // Live-adjust the gate threshold from the header slider.
   useEffect(() => {
     micRef.current?.setThresholdDb(gateDb);
   }, [gateDb, micReady]);
 
-  // Report in-progress voice time if the tab closes or the surface unmounts
-  // (e.g. "Back to problems") without an explicit Stop. flushUsage no-ops when
-  // there's nothing pending, so overlapping with Stop/End is safe.
+  // A hidden/backgrounded voice tab is an uncontrolled cost risk. End the
+  // interview immediately and report usage rather than relying on throttled
+  // timers to enforce the cap.
   useEffect(() => {
-    const onHide = () => flushUsage();
+    const onHide = () => {
+      if (liveSinceRef.current !== null) finishInterview();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") onHide();
+    };
     window.addEventListener("pagehide", onHide);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.removeEventListener("pagehide", onHide);
+      document.removeEventListener("visibilitychange", onVisibility);
       flushUsage();
+      closeRealtime();
     };
-  }, [flushUsage]);
+  }, [closeRealtime, finishInterview, flushUsage]);
 
-  // Prefetch the ephemeral client key so Start doesn't pay the mint
-  // round-trip. Keys live 10 minutes and are single-use; startSession
-  // consumes the cached one and falls back to a fresh fetch when stale.
-  const keyRef = useRef<{ value: string; expiresAt: number } | null>(null);
   const fetchKey = useCallback(async () => {
     const res = await fetch(SESSION_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: REALTIME_MODELS[mode] }),
     });
-    if (!res.ok) throw new Error(await res.text());
-    const data = (await res.json()) as { value: string; expires_at?: number };
-    keyRef.current = {
-      value: data.value,
-      expiresAt: (data.expires_at ?? 0) * 1000,
+    const data = (await res.json().catch(() => ({}))) as {
+      value?: string;
+      usage_id?: string | null;
+      error?: string;
     };
-    return data.value;
+    if (!res.ok || !data.value) {
+      if (res.status === 401 && typeof window !== "undefined") {
+        window.dispatchEvent(new Event("loop:locked"));
+      }
+      throw new Error(data.error ?? "Unable to create a voice session.");
+    }
+    return { value: data.value, usageId: data.usage_id ?? null };
   }, [mode]);
-  useEffect(() => {
-    // Warm the cache; a failure here isn't an error yet — Start retries.
-    fetchKey().catch(() => {});
-  }, [fetchKey]);
 
   const startSession = async () => {
+    if (startingRef.current || ended) return;
+    startingRef.current = true;
     setError(null);
     setStatus("connecting");
     try {
-      await readyRef.current;
-      const session = sessionRef.current;
-      if (!session) throw new Error("Session setup failed — reload the page.");
-      // The gate's AudioContext needs a user gesture to run; this click is it.
-      await micRef.current?.resume();
-      // Use the prefetched key when it's still comfortably valid (they're
-      // single-use, so drop it either way); otherwise mint a fresh one.
-      const cached = keyRef.current;
-      const value =
-        cached && cached.expiresAt - Date.now() > 30_000
-          ? cached.value
-          : await fetchKey();
-      keyRef.current = null; // consumed by this connect either way
-      await session.connect({ apiKey: value, model: REALTIME_MODELS[mode] });
+      // Microphone access happens only after the explicit Start gesture.
+      const mic = await createGatedMic(gateDb).catch(() => {
+        throw new Error(
+          "Microphone access is required. Allow it in your browser settings and try again.",
+        );
+      });
+      micRef.current = mic;
+      setMicReady(true);
+      await mic.resume();
+
+      const session = createInterviewSession({
+        problem,
+        mode,
+        micStream: mic.stream,
+        getEditorState: () => editorStateRef.current,
+        getTimeRemaining,
+        onHintRequested: () => setHints((h) => h + 1),
+        // Defer closure until the SDK has returned the tool result.
+        onEndSession: () => setTimeout(finishInterview, 0),
+        onEditCode: setCode,
+      });
+      sessionRef.current = session;
+
+      const onHistory = (items: unknown[]) => setTranscript(buildTranscript(items));
+      const onAudioStart = () => setSpeaking(true);
+      const onAudioStopped = () => setSpeaking(false);
+      const onErr = (event: unknown) => {
+        if (closingRef.current) return;
+        const err = event as { error?: { message?: string }; message?: string };
+        setError(
+          typeof event === "string"
+            ? event
+            : (err?.error?.message ?? err?.message ?? "Voice session error"),
+        );
+        if (liveSinceRef.current !== null) {
+          finishInterview();
+        } else {
+          closeRealtime();
+          setStatus("idle");
+        }
+      };
+      session.on("history_updated", onHistory);
+      session.on("audio_start", onAudioStart);
+      session.on("audio_stopped", onAudioStopped);
+      session.on("audio_interrupted", onAudioStopped);
+      session.on("error", onErr);
+      cleanupSessionListenersRef.current = () => {
+        session.off("history_updated", onHistory);
+        session.off("audio_start", onAudioStart);
+        session.off("audio_stopped", onAudioStopped);
+        session.off("audio_interrupted", onAudioStopped);
+        session.off("error", onErr);
+      };
+
+      const credential = await fetchKey();
+      usageIdRef.current = credential.usageId;
+      await session.connect({
+        apiKey: credential.value,
+        model: REALTIME_MODELS[mode],
+      });
       setStatus("live");
-      setStartedAt(Date.now());
-      startedAtRef.current = Date.now();
-      liveSinceRef.current = Date.now();
+      const connectedAt = Date.now();
+      setStartedAt(connectedAt);
+      setNow(connectedAt);
+      startedAtRef.current = connectedAt;
+      liveSinceRef.current = connectedAt;
+      if (credential.usageId) {
+        await fetch("/api/usage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "connected",
+            usageId: credential.usageId,
+          }),
+        }).catch(() => undefined);
+      }
       // Treat the greeting as already in flight: the half-duplex effect keys
       // off `speaking`, so this keeps the mic closed from the very first live
       // moment — otherwise room noise in the seconds before the greeting's
@@ -347,8 +355,14 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       await new Promise((r) => setTimeout(r, 500));
       session.transport.sendEvent({ type: "response.create" });
     } catch (e) {
+      // A failure can happen after WebRTC connected (for example while sending
+      // the first response event), so finalize any live usage before teardown.
+      flushUsage();
+      closeRealtime();
       setError(e instanceof Error ? e.message : String(e));
       setStatus("idle");
+    } finally {
+      startingRef.current = false;
     }
   };
 
@@ -377,12 +391,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
     if (el) el.scrollTop = el.scrollHeight;
   }, [transcript]);
 
-  const stopSession = () => {
-    flushUsage();
-    sessionRef.current?.close();
-    setSpeaking(false);
-    setStatus("idle");
-  };
+  const stopSession = finishInterview;
 
   const [running, setRunning] = useState(false);
   const [output, setOutput] = useState<string | null>(null);
@@ -415,6 +424,9 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       });
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 401 && typeof window !== "undefined") {
+          window.dispatchEvent(new Event("loop:locked"));
+        }
         setOutput(data.error ?? `Run failed (${res.status})`);
         return;
       }
@@ -425,9 +437,13 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       setOutput(text || "(no output)");
       // Let the interviewer see what was run and what it produced.
       if (status === "live") {
-        lastSyncRef.current = code;
+        lastSyncRef.current = `${language}\0${code}`;
+        const boundedOutput = (text || "(no output)").slice(
+          0,
+          MAX_SYNC_OUTPUT_CHARS,
+        );
         pushEditorState(
-          `${EDITOR_SYNC_PREFIX} The candidate ran their code. Editor (${language}):\n\`\`\`\n${code}\n\`\`\`\nOutput:\n${text || "(no output)"}`,
+          `${EDITOR_SYNC_PREFIX} The candidate ran the ${language} editor. Call get_editor_state for the code. Output:\n${boundedOutput}`,
         );
       }
     } catch (e) {
@@ -478,7 +494,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
             : "listening";
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-[100dvh] flex-col">
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-neutral-800 px-4 py-3">
         <div className="flex items-center gap-2">
           <span
@@ -551,7 +567,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
               onClick={stopSession}
               className="rounded-md border border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-800"
             >
-              Stop session
+              End session
             </button>
           )}
           <button
@@ -637,6 +653,10 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
                   </span>
                 )}
               </pre>
+              <p className="mt-2 text-[11px] leading-relaxed text-neutral-600">
+                Run sends the current code to Paiza&apos;s public execution service.
+                Do not include secrets or private data.
+              </p>
             </div>
           </div>
         </div>
@@ -666,9 +686,6 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
                 ))}
               </div>
             )}
-            <p className="mt-2 text-neutral-500">
-              Target: {problem.targetComplexity}
-            </p>
           </div>
 
           <div className="flex items-center justify-between border-b border-neutral-800/60 px-4 py-2">

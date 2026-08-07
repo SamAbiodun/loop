@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 type CodeRecord = {
+  id: string;
   code: string;
   label: string;
   enabled: boolean;
@@ -43,6 +44,8 @@ export function AdminPanel() {
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [justCreated, setJustCreated] = useState<string | null>(null);
+  const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [persistent, setPersistent] = useState(true);
   const [requests, setRequests] = useState<AccessRequest[]>([]);
 
@@ -51,6 +54,9 @@ export function AdminPanel() {
     if (res.ok) {
       const d = (await res.json()) as { requests: AccessRequest[] };
       setRequests(d.requests);
+    } else {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      setActionError(data.error ?? "Unable to load access requests.");
     }
   }, []);
 
@@ -60,17 +66,25 @@ export function AdminPanel() {
       const d = (await res.json()) as { codes: CodeRecord[]; persistent: boolean };
       setCodes(d.codes);
       setPersistent(d.persistent);
+    } else {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      setActionError(data.error ?? "Unable to load access codes.");
     }
     void loadRequests();
   }, [loadRequests]);
 
   async function dismissRequest(id: string) {
-    setRequests((rs) => rs.filter((r) => r.id !== id));
-    await fetch("/api/admin/requests", {
+    setActionError(null);
+    const res = await fetch("/api/admin/requests", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }),
     });
+    if (res.ok) {
+      setRequests((rs) => rs.filter((r) => r.id !== id));
+    } else {
+      setActionError("Unable to dismiss that request.");
+    }
   }
 
   function fillFromRequest(r: AccessRequest) {
@@ -110,6 +124,7 @@ export function AdminPanel() {
   async function generate(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
+    setActionError(null);
     try {
       const res = await fetch("/api/admin/codes", {
         method: "POST",
@@ -117,38 +132,52 @@ export function AdminPanel() {
         body: JSON.stringify({ label }),
       });
       if (res.ok) {
-        const d = (await res.json()) as { code: CodeRecord };
-        setJustCreated(d.code.code);
+        const d = (await res.json()) as { code: CodeRecord; plaintext: string };
+        setJustCreated(d.plaintext);
+        setJustCreatedId(d.code.id);
         setLabel("");
         await loadCodes();
-      }
+      } else setActionError("Unable to generate a code.");
+    } catch {
+      setActionError("Unable to generate a code.");
     } finally {
       setBusy(false);
     }
   }
 
   async function toggle(rec: CodeRecord) {
-    setCodes((cs) =>
-      cs.map((c) => (c.code === rec.code ? { ...c, enabled: !c.enabled } : c)),
-    );
-    await fetch("/api/admin/codes", {
+    setActionError(null);
+    const res = await fetch("/api/admin/codes", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: rec.code, enabled: !rec.enabled }),
+      body: JSON.stringify({ id: rec.id, enabled: !rec.enabled }),
     });
-    void loadCodes();
+    if (res.ok) {
+      setCodes((cs) =>
+        cs.map((c) => (c.id === rec.id ? { ...c, enabled: !c.enabled } : c)),
+      );
+    } else setActionError("Unable to update that code.");
   }
 
   async function remove(rec: CodeRecord) {
     if (!confirm(`Delete code "${rec.label}" (${rec.code})? This can't be undone.`)) {
       return;
     }
-    setCodes((cs) => cs.filter((c) => c.code !== rec.code));
-    await fetch("/api/admin/codes", {
+    setActionError(null);
+    const res = await fetch("/api/admin/codes", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: rec.code }),
+      body: JSON.stringify({ id: rec.id }),
     });
+    if (res.ok) {
+      setCodes((cs) => cs.filter((c) => c.id !== rec.id));
+    } else setActionError("Unable to delete that code.");
+  }
+
+  async function logout() {
+    await fetch("/api/admin/unlock", { method: "DELETE" });
+    setPasscode("");
+    setGate("locked");
   }
 
   if (gate === "checking") {
@@ -202,10 +231,25 @@ export function AdminPanel() {
     <div className="mx-auto max-w-4xl p-6">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-semibold tracking-tight">Access codes</h1>
-        <Link href="/" className="text-sm text-neutral-400 hover:text-neutral-200">
-          ← app
-        </Link>
+        <div className="flex items-center gap-4">
+          <Link href="/" className="text-sm text-neutral-400 hover:text-neutral-200">
+            ← app
+          </Link>
+          <button
+            type="button"
+            onClick={() => void logout()}
+            className="text-sm text-neutral-500 hover:text-neutral-200"
+          >
+            Sign out
+          </button>
+        </div>
       </div>
+
+      {actionError && (
+        <div className="mb-4 rounded-lg border border-rose-800/50 bg-rose-950/30 px-3 py-2 text-sm text-rose-300">
+          {actionError}
+        </div>
+      )}
 
       {!persistent && (
         <div className="mb-4 rounded-lg border border-amber-700/50 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
@@ -301,14 +345,14 @@ export function AdminPanel() {
             <tbody className="divide-y divide-neutral-800/60">
               {codes.map((c) => (
                 <tr
-                  key={c.code}
+                  key={c.id}
                   className={c.enabled ? "" : "text-neutral-500"}
                 >
                   <td className="px-3 py-2">{c.label}</td>
                   <td className="px-3 py-2">
                     <code
                       className={`rounded px-1.5 py-0.5 text-xs ${
-                        justCreated === c.code
+                        justCreatedId === c.id
                           ? "bg-emerald-500/15 text-emerald-300"
                           : "bg-neutral-800 text-neutral-200"
                       }`}
@@ -350,6 +394,14 @@ export function AdminPanel() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      {justCreated && (
+        <div className="mt-4 rounded-lg border border-emerald-700/50 bg-emerald-950/30 p-3 text-sm text-emerald-200">
+          <p className="font-medium">Copy this code now—it is shown only once.</p>
+          <code className="mt-2 block select-all text-base tracking-wider">
+            {justCreated}
+          </code>
         </div>
       )}
       <p className="mt-4 text-xs text-neutral-600">

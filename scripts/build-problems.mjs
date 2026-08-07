@@ -10,10 +10,52 @@ const OUT = new URL(
 );
 const WANT = 30;
 
+function cleanText(value) {
+  return value
+    .replace(/\$+/g, "")
+    .replace(/\\leq?/g, "≤")
+    .replace(/\\geq?/g, "≥")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function cleanQuestion(q) {
-  // Keep the prose up to the first example / IO section; collapse whitespace.
-  const cut = q.split(/-----|Example|\bInput\b\s*[:\n]/)[0];
-  return cut.replace(/\s+/g, " ").trim();
+  // Candidate-facing statement only. Examples, IO boilerplate and constraints
+  // are extracted into structured fields below.
+  const cut = q.split(/-----|\bExamples?\b\s*[:\n]|\bInput\b\s*[:\n]|\bConstraints?\b\s*[:\n]/i)[0];
+  return cleanText(cut);
+}
+
+function extractExamples(question) {
+  const examples = [];
+  const examplesMarker = question.search(/-{3,}\s*Examples?\s*-{3,}/i);
+  const source = examplesMarker >= 0 ? question.slice(examplesMarker) : question;
+  const re = /\bInput\b\s*:?\s*([\s\S]*?)\bOutput\b\s*:?\s*([\s\S]*?)(?=\bInput\b\s*:?|\bExamples?\b\s*:?|\bNote\b\s*:?|\bConstraints?\b\s*:?|$)/gi;
+  let match;
+  while ((match = re.exec(source)) && examples.length < 3) {
+    const input = cleanText(match[1].replace(/^-{3,}|-{3,}$/g, "")).slice(0, 400);
+    const output = cleanText(match[2].replace(/^-{3,}|-{3,}$/g, "")).slice(0, 400);
+    if (input && output) examples.push({ input, output });
+  }
+  return examples;
+}
+
+function extractConstraints(question) {
+  const match = question.match(
+    /\bConstraints?\b\s*:?\s*([\s\S]*?)(?=\bInput\b\s*:?|\bOutput\b\s*:?|\bExamples?\b\s*:?|\bNote\b\s*:?|$)/i,
+  );
+  const source =
+    match?.[1] ??
+    question.match(
+      /\bInput\b\s*[-:]*\s*([\s\S]*?)(?=\bOutput\b\s*[-:]*)/i,
+    )?.[1] ??
+    "";
+  if (!source) return [];
+  return source
+    .split(/\n|•|(?<=\.)\s+(?=[A-Za-z0-9$])/)
+    .map((item) => cleanText(item.replace(/^[-*]\s*/, "")))
+    .filter((item) => item.length >= 3 && !/^-+$/.test(item))
+    .slice(0, 8);
 }
 
 function titleFrom(q, id) {
@@ -36,7 +78,8 @@ for (let offset = 0; offset < 600 && picked.length < WANT; offset += 100) {
   const rows = await fetchPage(offset, 100);
   for (const row of rows) {
     const starter = String(row.starter_code || "").trim();
-    const question = cleanQuestion(String(row.question || ""));
+    const rawQuestion = String(row.question || "");
+    const question = cleanQuestion(rawQuestion);
     // APPS interview problems are mostly stdin/stdout with no starter code;
     // filter on a read-aloud-friendly length and supply a blank stub.
     if (question.length < 60 || question.length > 900) continue;
@@ -46,9 +89,10 @@ for (let offset = 0; offset < 600 && picked.length < WANT; offset += 100) {
       difficulty: "Medium",
       category: "Open Dataset (APPS · interview)",
       statement: question,
-      constraints: [],
+      constraints: extractConstraints(rawQuestion),
       targetComplexity: "—",
       starterCode: starter || "// Write your solution here.\n",
+      examples: extractExamples(rawQuestion),
       source: "open",
     });
     if (picked.length >= WANT) break;

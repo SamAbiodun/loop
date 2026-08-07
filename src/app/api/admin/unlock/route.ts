@@ -6,6 +6,14 @@ import {
   adminTokenFor,
   isAdmin,
 } from "@/lib/auth";
+import {
+  RequestBodyError,
+  checkRateLimit,
+  hashIdentifier,
+  rateLimitResponse,
+  readJsonWithLimit,
+  requestIp,
+} from "@/lib/security";
 
 export const runtime = "nodejs";
 
@@ -22,12 +30,21 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const limit = await checkRateLimit({
+    bucket: "admin-unlock-15m",
+    identifier: hashIdentifier(requestIp(request)),
+    limit: 8,
+    windowSeconds: 15 * 60,
+  });
+  if (!limit.allowed) return rateLimitResponse(limit);
+
   let passcode = "";
   try {
-    const body = await request.json();
+    const body = await readJsonWithLimit<{ passcode?: unknown }>(request, 2_048);
     if (typeof body?.passcode === "string") passcode = body.passcode.trim();
-  } catch {
-    // empty — fails validation
+  } catch (error) {
+    const status = error instanceof RequestBodyError ? error.status : 400;
+    return NextResponse.json({ error: "Invalid sign-in request." }, { status });
   }
 
   if (!adminPasscodeValid(passcode)) {
@@ -41,6 +58,18 @@ export async function POST(request: NextRequest) {
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 60 * 24 * 30, // 30 days
+  });
+  return res;
+}
+
+export async function DELETE() {
+  const res = NextResponse.json({ authed: false });
+  res.cookies.set(ADMIN_COOKIE, "", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: 0,
   });
   return res;
 }

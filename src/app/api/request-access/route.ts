@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { gateRequired } from "@/lib/auth";
-import { createRequest } from "@/lib/requests";
+import { gateConfigurationError, gateRequired } from "@/lib/auth";
+import { kv } from "@/lib/kv";
+import { createRequest, isValidEmail } from "@/lib/requests";
+import {
+  RequestBodyError,
+  checkRateLimit,
+  hashIdentifier,
+  rateLimitResponse,
+  readJsonWithLimit,
+  requestIp,
+} from "@/lib/security";
 
 export const runtime = "nodejs";
 
@@ -13,20 +22,50 @@ export const runtime = "nodejs";
  */
 export async function POST(request: NextRequest) {
   if (!gateRequired()) return NextResponse.json({ ok: true });
+  const configurationError = gateConfigurationError();
+  if (configurationError) {
+    return NextResponse.json({ error: configurationError }, { status: 503 });
+  }
+
+  const limit = await checkRateLimit({
+    bucket: "access-request-hour",
+    identifier: hashIdentifier(requestIp(request)),
+    limit: 3,
+    windowSeconds: 60 * 60,
+  });
+  if (!limit.allowed) return rateLimitResponse(limit);
 
   let name = "";
   let email = "";
   let note = "";
   try {
-    const body = await request.json();
+    const body = await readJsonWithLimit<Record<string, unknown>>(request, 4_096);
     if (typeof body?.name === "string") name = body.name;
     if (typeof body?.email === "string") email = body.email;
     if (typeof body?.note === "string") note = body.note;
-  } catch {
-    // not JSON — falls through to validation below
+  } catch (error) {
+    const status = error instanceof RequestBodyError ? error.status : 400;
+    return NextResponse.json({ error: "Invalid access request." }, { status });
   }
 
-  const created = await createRequest({ name, email, note });
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!name.trim() || !isValidEmail(normalizedEmail)) {
+    return NextResponse.json(
+      { error: "Please enter your name and a valid email." },
+      { status: 400 },
+    );
+  }
+  const firstForEmail = await kv.setIfAbsent(
+    `access-request-email:${hashIdentifier(normalizedEmail)}`,
+    true,
+    24 * 60 * 60,
+  );
+  if (!firstForEmail) {
+    // Idempotent response avoids leaking whether an address is already queued.
+    return NextResponse.json({ ok: true });
+  }
+
+  const created = await createRequest({ name, email: normalizedEmail, note });
   if (!created) {
     return NextResponse.json(
       { error: "Please enter your name and a valid email." },

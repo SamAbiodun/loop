@@ -15,6 +15,7 @@ import {
   type Difficulty,
   type Problem,
 } from "./problems";
+import { usePasscodeGate } from "./PasscodeGate";
 
 type ProblemPickerProps = {
   onStart: (problem: Problem, mode: InterviewMode) => void;
@@ -34,6 +35,7 @@ function matches(p: Problem, q: string): boolean {
 }
 
 export function ProblemPicker({ onStart }: ProblemPickerProps) {
+  const gate = usePasscodeGate();
   const [includeOpen, setIncludeOpen] = useState(false);
   const [mode, setMode] = useState<InterviewMode>(DEFAULT_MODE);
   const [query, setQuery] = useState("");
@@ -52,12 +54,23 @@ export function ProblemPicker({ onStart }: ProblemPickerProps) {
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-5">
       <header>
+        <div className="flex items-start justify-between gap-4">
         <h1 className="text-3xl font-semibold tracking-tight">
           <span className="bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
             loop
           </span>
           <span className="text-neutral-400"> · DSA voice interviews</span>
         </h1>
+          {gate.required && (
+            <button
+              type="button"
+              onClick={() => void gate.logout()}
+              className="mt-1 text-xs text-neutral-500 hover:text-neutral-300"
+            >
+              Sign out
+            </button>
+          )}
+        </div>
         <p className="mt-2 text-sm text-neutral-400">
           Talk through a problem out loud with an AI interviewer — it listens,
           probes your reasoning, and watches your code as you write it.

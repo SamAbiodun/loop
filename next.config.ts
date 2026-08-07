@@ -1,10 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // The RealtimeSession (WebRTC + mic) is created once per interview mount;
-  // Strict Mode's dev double-mount would tear it down mid-handshake, so keep
-  // dev behavior identical to prod.
-  reactStrictMode: false,
+  // Session creation now happens only from the Start gesture, so Strict Mode's
+  // development effect checks are safe and useful again.
+  reactStrictMode: true,
+  // Keep generated agent-instruction files out of application worktrees.
+  agentRules: false,
 };
 
 export default nextConfig;

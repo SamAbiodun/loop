@@ -14,7 +14,22 @@ import { Redis } from "@upstash/redis";
 
 export interface Kv {
   getJSON<T>(key: string): Promise<T | null>;
-  setJSON(key: string, value: unknown): Promise<void>;
+  setJSON(
+    key: string,
+    value: unknown,
+    options?: { ttlSeconds?: number },
+  ): Promise<void>;
+  /** Set only when the key does not already exist. */
+  setIfAbsent(
+    key: string,
+    value: unknown,
+    ttlSeconds: number,
+  ): Promise<boolean>;
+  exists(key: string): Promise<boolean>;
+  /** Atomic integer increment. */
+  incrBy(key: string, amount: number): Promise<number>;
+  /** Atomic increment whose expiry is set on the first hit. */
+  increment(key: string, ttlSeconds: number): Promise<number>;
   del(key: string): Promise<void>;
   sadd(key: string, member: string): Promise<void>;
   srem(key: string, member: string): Promise<void>;
@@ -41,8 +56,35 @@ function upstashKv(): Kv {
       // Upstash auto-deserializes JSON written via set().
       return (await redis.get<T>(key)) ?? null;
     },
-    async setJSON(key, value) {
-      await redis.set(key, value);
+    async setJSON(key, value, options) {
+      if (options?.ttlSeconds) {
+        await redis.set(key, value, { ex: options.ttlSeconds });
+      } else {
+        await redis.set(key, value);
+      }
+    },
+    async setIfAbsent(key, value, ttlSeconds) {
+      const result = await redis.set(key, value, {
+        nx: true,
+        ex: ttlSeconds,
+      });
+      return result === "OK";
+    },
+    async exists(key) {
+      return (await redis.exists(key)) > 0;
+    },
+    async incrBy(key, amount) {
+      return await redis.incrby(key, amount);
+    },
+    async increment(key, ttlSeconds) {
+      const script = `
+        local current = redis.call('INCR', KEYS[1])
+        if current == 1 then
+          redis.call('EXPIRE', KEYS[1], ARGV[1])
+        end
+        return current
+      `;
+      return Number(await redis.eval(script, [key], [ttlSeconds]));
     },
     async del(key) {
       await redis.del(key);
@@ -61,16 +103,58 @@ function upstashKv(): Kv {
 
 function memoryKv(): Kv {
   const values = new Map<string, unknown>();
+  const expires = new Map<string, number>();
   const sets = new Map<string, Set<string>>();
+
+  const purgeIfExpired = (key: string) => {
+    const expiresAt = expires.get(key);
+    if (expiresAt !== undefined && expiresAt <= Date.now()) {
+      values.delete(key);
+      expires.delete(key);
+    }
+  };
+
   return {
     async getJSON<T>(key: string) {
+      purgeIfExpired(key);
       return (values.get(key) as T | undefined) ?? null;
     },
-    async setJSON(key, value) {
+    async setJSON(key, value, options) {
       values.set(key, value);
+      if (options?.ttlSeconds) {
+        expires.set(key, Date.now() + options.ttlSeconds * 1000);
+      } else {
+        expires.delete(key);
+      }
+    },
+    async setIfAbsent(key, value, ttlSeconds) {
+      purgeIfExpired(key);
+      if (values.has(key)) return false;
+      values.set(key, value);
+      expires.set(key, Date.now() + ttlSeconds * 1000);
+      return true;
+    },
+    async exists(key) {
+      purgeIfExpired(key);
+      return values.has(key);
+    },
+    async incrBy(key, amount) {
+      purgeIfExpired(key);
+      const next = Number(values.get(key) ?? 0) + amount;
+      values.set(key, next);
+      return next;
+    },
+    async increment(key, ttlSeconds) {
+      purgeIfExpired(key);
+      const isNew = !values.has(key);
+      const next = Number(values.get(key) ?? 0) + 1;
+      values.set(key, next);
+      if (isNew) expires.set(key, Date.now() + ttlSeconds * 1000);
+      return next;
     },
     async del(key) {
       values.delete(key);
+      expires.delete(key);
     },
     async sadd(key, member) {
       (sets.get(key) ?? sets.set(key, new Set()).get(key)!).add(member);

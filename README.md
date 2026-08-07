@@ -2,14 +2,14 @@
 
 A browser app for practising **data-structures & algorithms interviews out loud**. Pick a problem, then talk through it with an AI interviewer over voice — it listens, probes your reasoning, gives hints when asked, and can write into your code editor. Powered by the OpenAI Realtime API.
 
-> Personal project. Not multi-tenant; no auth/billing.
+> Personal project. Access is intentionally lightweight; it is not a general-purpose identity or billing system.
 
 ## Features
 
 - **Voice-first mock interview** — speech-to-speech via OpenAI Realtime (WebRTC), with a 5-phase interviewer (clarify → approach → code → test → analyze).
 - **NeetCode 150** problem bank, original statements with worked examples, grouped by category and **searchable**, plus an opt-in pool from the open APPS dataset.
 - **Monaco code editor** — per-language starters and buffers, a **Run ▶** panel that executes your code, and interviewer tools to read the live editor state and write into it.
-- **Cost controls** — a model toggle (**Practice** = `gpt-realtime-2.1-mini`, the cheaper default; **Hard** = `gpt-realtime-2.1`), a concise interviewer prompt, and a 30-minute session cap.
+- **Cost controls** — a server-side model allowlist, concise interviewer prompt, request quotas, usage lifecycle accounting, and a 30-minute session cap. Leaving or hiding a live interview ends it instead of keeping an unseen paid session open.
 
 ## Prerequisites
 
@@ -44,7 +44,7 @@ src/
     api/session/route.ts     POST /api/session — mints an ephemeral Realtime client secret
     api/run/route.ts         POST /api/run — executes editor code via a public runner
     api/unlock/route.ts      POST /api/unlock — validate an access code, set the gate cookie
-    api/usage/route.ts       POST /api/usage — record voice seconds against a code (beacon)
+    api/usage/route.ts       POST /api/usage — connect/finalize authenticated voice usage
     api/admin/unlock         admin sign-in
     api/admin/codes          list / generate / enable-disable / delete access codes
     admin/page.tsx           the /admin access-code dashboard
@@ -68,12 +68,15 @@ src/
   lib/
     env.ts                   validated, server-only env access
     auth.ts                  gate mode (codes / passcode / open) + admin auth
-    codes.ts                 access-code records, generation, usage counters
-    kv.ts                    Upstash Redis store (in-memory fallback for dev)
+    codes.ts                 hashed access-code records, generation, atomic usage counters
+    kv.ts                    Upstash Redis store + expiring/atomic primitives
+    security.ts              bounded JSON parsing, request identity, rate limiting, timeouts
+    usage.ts                 idempotent voice-session lifecycle accounting
 scripts/
   setup.sh                   one-shot setup for new clones
   build-problems.mjs         regenerate the opt-in open dataset (problems.open.json)
   repro-session.mjs          headless smoke test of the voice session
+.github/workflows/ci.yml    lint, typecheck, unit tests, and production build
 ```
 
 ## Architecture & design decisions
@@ -84,7 +87,7 @@ commands — lives under [Deploying](#deploying)):
 | Layer | Choice | Why |
 | ----- | ------ | --- |
 | **Framework** | Next.js (App Router) + TypeScript | One project for the UI **and** the server-side API routes it needs, deployed as a unit. The routes exist so the OpenAI key and code-runner never touch the browser. |
-| **Hosting** | **Vercel** (project `loop-interview`) | First-class Next.js host with a Node runtime for the API routes — static hosting (e.g. GitHub Pages) can't run them. Free tier. Deployed via the Vercel CLI (`vercel --prod`). |
+| **Hosting** | **Vercel** (project `loop-interview`) | First-class Next.js host with a Node runtime for the API routes — static hosting (e.g. GitHub Pages) can't run them. Git pushes create deployments: `main` is production; `dev` and PR branches are previews. |
 | **Voice** | OpenAI Realtime via [`@openai/agents`](https://github.com/openai/openai-agents-js) (`RealtimeAgent`/`RealtimeSession`) over WebRTC | Speech-to-speech with browser-native audio. `/api/session` mints a short-lived **ephemeral** client secret so the real API key never reaches the browser. |
 | **Editor** | Monaco (`@monaco-editor/react`) | VS Code-grade editing; per-language buffers and starters. |
 | **Code runner** | Paiza.io, proxied via `/api/run` | Runs arbitrary candidate code without us hosting a sandbox; Paiza's guest API is free and needs no signup. (Piston, the original pick, went whitelist-only in Feb 2026.) Trade-off: code is sent to a third-party public service. |
@@ -93,7 +96,7 @@ commands — lives under [Deploying](#deploying)):
 | **Admin dashboard** | `/admin`, gated by `ADMIN_PASSCODE` | Web UI to generate labelled codes, watch per-code usage, and enable/disable/delete — manageable from any device, no redeploys. Codes-mode is tied to `ADMIN_PASSCODE` on purpose: codes can only be minted here, so without it the gate would lock everyone out. |
 | **Domain / DNS** | `loop.samabiodun.tech`, DNS on **Cloudflare** | A subdomain, so the root `samabiodun.tech` portfolio is untouched. Grey-cloud (DNS-only) CNAME → Vercel; see [Custom domain / DNS](#custom-domain--dns). |
 
-`reactStrictMode` is off — see [Notes](#notes) for why.
+`reactStrictMode` is enabled. Realtime and microphone resources are created only from the explicit Start gesture and are cleaned up idempotently.
 
 ## Deploying
 
@@ -119,26 +122,28 @@ The Vercel project is connected to this GitHub repo with **production branch =
 - **`dev` and PR branches → preview.** Each push gets its own preview URL
   (protected by Vercel deployment auth — only you can open it).
 
-Release flow: branch off `dev` → PR into `dev` → when ready, promote `dev` to
-`main` to ship:
+Release flow: branch off `dev` → PR into `dev` → validate its preview → when
+explicitly ready for production, promote `dev` to `main`. Do not run a
+production deployment while validating `dev`.
 
 ```bash
-git push origin origin/dev:main   # fast-forward main to dev = production deploy
+git push origin dev               # preview deployment only
+# Production is a separate, deliberate main-branch operation.
 ```
 
 `ADMIN_PASSCODE` / `OPENAI_API_KEY` / `UPSTASH_*` are stored on the Vercel
 project and persist across deploys; changing an env var needs a redeploy to take
 effect. For preview deploys (`dev`/PRs) to be fully functional, scope those env
-vars to **Preview** as well as Production. Manual CLI deploys (`vercel --prod`)
-still work as a fallback.
+vars to **Preview** as well as Production. Running `vercel --prod` is explicitly
+a production action and is not part of the preview workflow.
 
 **Environment variables** (Vercel → Project → Settings → Environment Variables — all set in production):
 
 | Variable         | Required | Purpose                                                                 |
 | ---------------- | -------- | ----------------------------------------------------------------------- |
 | `OPENAI_API_KEY` | yes      | Realtime API access + credit. Never shipped to the browser.             |
-| `ADMIN_PASSCODE` | prod     | Turns on the **multi-code** access system and guards `/admin`. Set this in production so a public URL can't drain your OpenAI credit. |
-| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | prod | Where access codes + usage live. Auto-injected by the Upstash Vercel integration. Without them the code store falls back to non-persistent in-memory (resets on redeploy). |
+| `ADMIN_PASSCODE` | deployed | Turns on the **multi-code** access system and guards `/admin`. Set this on every public deployment so it cannot drain OpenAI credit. |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | deployed codes mode | Where access codes + usage live. Auto-injected by the Upstash Vercel integration. A Vercel deployment now refuses codes mode without persistent Redis; the in-memory fallback is local-development only. |
 | `APP_PASSCODE`   | no       | Legacy single-passcode fallback, used only when `ADMIN_PASSCODE` is unset. No usage tracking. |
 
 ### Access codes (gate + usage + disable)
@@ -151,16 +156,24 @@ holder out immediately, even mid-visit.
 
 Manage codes at **`/admin`** (sign in with `ADMIN_PASSCODE`):
 
-- **Generate** a new code with a label (e.g. "Recruiter — Acme"). Share the
-  generated code with whoever you want to let in.
+- **Generate** a new code with a label (e.g. "Recruiter — Acme"). Its plaintext
+  is shown once so it can be shared; only a SHA-256 digest and masked display
+  value are retained afterward. Existing legacy plaintext records are migrated
+  lazily when used.
 - See per-code **usage**: sessions started, code runs, estimated voice minutes
   (the OpenAI cost driver), and last-used time.
 - **Enable/disable** any code with one click, or delete it.
 
-Codes and counters persist in **Upstash Redis** — add it from the Vercel
+Code digests and counters persist in **Upstash Redis** — add it from the Vercel
 Marketplace (free tier) and it injects the two `UPSTASH_REDIS_REST_*` vars
 automatically. Locally, leave everything unset to run fully open; set
 `ADMIN_PASSCODE` alone to exercise the panel against the in-memory store.
+
+Sensitive routes also enforce bounded request bodies, input validation, provider
+timeouts, and per-actor rate limits. Session usage is counted only after a
+Realtime connection succeeds, and final duration reporting is idempotent and
+server-capped. These are abuse controls, not a substitute for monitoring the
+OpenAI and Vercel dashboards.
 
 ### Custom domain / DNS
 
@@ -190,6 +203,7 @@ cert can take up to ~an hour to propagate across all edge PoPs (the
 
 ## Notes
 
-- `reactStrictMode` is **off** (`next.config.ts`): the RealtimeSession (WebRTC + mic) is created once per interview mount, and Strict Mode's dev double-mount would tear it down mid-handshake.
+- `reactStrictMode` is **on** (`next.config.ts`). The RealtimeSession and microphone are created only after **Start session**, and cleanup safely tolerates repeated calls.
 - **Run ▶** sends the editor contents to a third-party public runner (Paiza.io) — don't paste anything sensitive.
-- Realtime audio is billed per minute. Practice mode + the session cap keep it cheap, but the meter is live.
+- Realtime audio is billed per minute. Practice mode, rate limits, background cleanup, and the session cap reduce exposure, but the provider meter is authoritative.
+- Run `npm run check` before pushing; CI repeats lint, TypeScript, Vitest, and the webpack production build.

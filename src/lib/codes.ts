@@ -1,34 +1,53 @@
 /**
- * Access codes: the multi-passcode system behind the app.
+ * Access-code records and atomic usage counters.
  *
- * Each code is a record in the KV store (src/lib/kv.ts) holding a label, an
- * enabled flag, and usage counters (sessions started, code runs, and voice
- * seconds — the OpenAI cost driver). Codes are checked against the store on
- * every paid request, so disabling one takes effect immediately, even for a
- * visitor who already unlocked.
- *
- * Server-only.
+ * New codes are stored by SHA-256 digest, never as plaintext. Legacy plaintext
+ * records are migrated lazily when they are listed or used. The browser still
+ * carries the plaintext code as an httpOnly bearer cookie, but a Redis leak no
+ * longer reveals newly issued credentials.
  */
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { kv } from "./kv";
 
 export type CodeRecord = {
+  /** Opaque admin identifier (the credential digest). */
+  id: string;
+  /** Masked value for display; the plaintext is returned only at creation. */
   code: string;
   label: string;
   enabled: boolean;
-  created: string; // ISO
-  sessions: number; // voice sessions started
-  runs: number; // code executions
-  seconds: number; // total voice seconds (÷60 for minutes)
-  lastUsed: string | null; // ISO
+  created: string;
+  sessions: number;
+  runs: number;
+  seconds: number;
+  lastUsed: string | null;
 };
 
-const INDEX = "codes"; // set of all code strings
-const key = (code: string) => `code:${code}`;
+type StoredCodeRecord = CodeRecord & { version: 2 };
+type LegacyCodeRecord = Omit<CodeRecord, "id">;
 
-// Crockford base32 minus ambiguous chars, so codes are safe to read aloud
-// and type. 10 chars ≈ 50 bits of entropy — plenty for a demo gate.
+const INDEX = "codes";
+const key = (id: string) => `code:${id}`;
+const usageKey = (id: string, field: "sessions" | "runs" | "seconds") =>
+  `code-usage:${id}:${field}`;
+const lastUsedKey = (id: string) => `code-usage:${id}:last-used`;
+
 const ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+const DIGEST_RE = /^[a-f0-9]{64}$/;
+const MAX_LABEL = 160;
+
+export function normalizeCode(code: string): string {
+  return code.trim().toUpperCase();
+}
+
+export function digestCode(code: string): string {
+  return createHash("sha256").update(normalizeCode(code)).digest("hex");
+}
+
+function previewCode(code: string): string {
+  const normalized = normalizeCode(code);
+  return `•••••-${normalized.slice(-5)}`;
+}
 
 export function generateCode(): string {
   const bytes = randomBytes(10);
@@ -37,24 +56,101 @@ export function generateCode(): string {
     out += ALPHABET[bytes[i] % ALPHABET.length];
     if (i === 4) out += "-";
   }
-  return out; // e.g. "K7P2M-9RXQ4"
+  return out;
+}
+
+async function hydrate(record: StoredCodeRecord): Promise<CodeRecord> {
+  const [sessions, runs, seconds, lastUsed] = await Promise.all([
+    kv.getJSON<number>(usageKey(record.id, "sessions")),
+    kv.getJSON<number>(usageKey(record.id, "runs")),
+    kv.getJSON<number>(usageKey(record.id, "seconds")),
+    kv.getJSON<string>(lastUsedKey(record.id)),
+  ]);
+  const { version: _version, ...publicRecord } = record;
+  void _version;
+  return {
+    ...publicRecord,
+    sessions: record.sessions + (sessions ?? 0),
+    runs: record.runs + (runs ?? 0),
+    seconds: record.seconds + (seconds ?? 0),
+    lastUsed: lastUsed ?? record.lastUsed,
+  };
+}
+
+/** Migrate a v1 record whose set member and key contain the plaintext code. */
+async function migrateLegacy(
+  plaintext: string,
+  legacy: LegacyCodeRecord,
+): Promise<StoredCodeRecord> {
+  const normalized = normalizeCode(plaintext);
+  const id = digestCode(normalized);
+  const existing = await kv.getJSON<StoredCodeRecord>(key(id));
+  if (existing) return existing;
+
+  const migrated: StoredCodeRecord = {
+    version: 2,
+    id,
+    code: previewCode(normalized),
+    label: String(legacy.label || "unnamed").slice(0, MAX_LABEL),
+    enabled: legacy.enabled !== false,
+    created: legacy.created || new Date().toISOString(),
+    sessions: Number(legacy.sessions || 0),
+    runs: Number(legacy.runs || 0),
+    seconds: Number(legacy.seconds || 0),
+    lastUsed: legacy.lastUsed || null,
+  };
+  await kv.setJSON(key(id), migrated);
+  await kv.sadd(INDEX, id);
+  await kv.del(key(plaintext));
+  await kv.srem(INDEX, plaintext);
+  return migrated;
+}
+
+async function storedForPlaintext(code: string): Promise<StoredCodeRecord | null> {
+  const normalized = normalizeCode(code);
+  if (!normalized) return null;
+  const id = digestCode(normalized);
+  const current = await kv.getJSON<StoredCodeRecord>(key(id));
+  if (current) return current;
+
+  // Backwards compatibility with codes issued before digest storage.
+  const legacy = await kv.getJSON<LegacyCodeRecord>(key(normalized));
+  return legacy ? migrateLegacy(normalized, legacy) : null;
+}
+
+async function recordForIndexMember(member: string): Promise<StoredCodeRecord | null> {
+  if (DIGEST_RE.test(member)) {
+    return await kv.getJSON<StoredCodeRecord>(key(member));
+  }
+  const legacy = await kv.getJSON<LegacyCodeRecord>(key(member));
+  return legacy ? migrateLegacy(member, legacy) : null;
 }
 
 export async function listCodes(): Promise<CodeRecord[]> {
-  const codes = await kv.smembers(INDEX);
-  const records = await Promise.all(codes.map((c) => kv.getJSON<CodeRecord>(key(c))));
-  return records
-    .filter((r): r is CodeRecord => r !== null)
-    .sort((a, b) => b.created.localeCompare(a.created));
+  const members = await kv.smembers(INDEX);
+  const stored = await Promise.all(members.map(recordForIndexMember));
+  const records = await Promise.all(
+    stored.filter((r): r is StoredCodeRecord => r !== null).map(hydrate),
+  );
+  return records.sort((a, b) => b.created.localeCompare(a.created));
 }
 
-export async function createCode(label: string): Promise<CodeRecord> {
-  let code = generateCode();
-  // Vanishingly unlikely, but never reuse an existing code.
-  while (await kv.getJSON<CodeRecord>(key(code))) code = generateCode();
-  const record: CodeRecord = {
-    code,
-    label: label.trim() || "unnamed",
+export async function createCode(label: string): Promise<{
+  record: CodeRecord;
+  plaintext: string;
+}> {
+  let plaintext = generateCode();
+  let id = digestCode(plaintext);
+  while (await kv.exists(key(id))) {
+    plaintext = generateCode();
+    id = digestCode(plaintext);
+  }
+
+  const stored: StoredCodeRecord = {
+    version: 2,
+    id,
+    code: previewCode(plaintext),
+    label: label.trim().slice(0, MAX_LABEL) || "unnamed",
     enabled: true,
     created: new Date().toISOString(),
     sessions: 0,
@@ -62,47 +158,52 @@ export async function createCode(label: string): Promise<CodeRecord> {
     seconds: 0,
     lastUsed: null,
   };
-  await kv.setJSON(key(code), record);
-  await kv.sadd(INDEX, code);
-  return record;
+  await kv.setJSON(key(id), stored);
+  await kv.sadd(INDEX, id);
+  return { record: await hydrate(stored), plaintext };
 }
 
-export async function setEnabled(code: string, enabled: boolean): Promise<void> {
-  const record = await kv.getJSON<CodeRecord>(key(code));
-  if (!record) return;
-  record.enabled = enabled;
-  await kv.setJSON(key(code), record);
+export async function setEnabled(id: string, enabled: boolean): Promise<boolean> {
+  if (!DIGEST_RE.test(id)) return false;
+  const record = await kv.getJSON<StoredCodeRecord>(key(id));
+  if (!record) return false;
+  await kv.setJSON(key(id), { ...record, enabled });
+  return true;
 }
 
-export async function deleteCode(code: string): Promise<void> {
-  await kv.del(key(code));
-  await kv.srem(INDEX, code);
+export async function deleteCode(id: string): Promise<boolean> {
+  if (!DIGEST_RE.test(id)) return false;
+  if (!(await kv.exists(key(id)))) return false;
+  await Promise.all([
+    kv.del(key(id)),
+    kv.del(usageKey(id, "sessions")),
+    kv.del(usageKey(id, "runs")),
+    kv.del(usageKey(id, "seconds")),
+    kv.del(lastUsedKey(id)),
+    kv.srem(INDEX, id),
+  ]);
+  return true;
 }
 
-/** True only when the code exists AND is enabled — the unlock/gate check. */
 export async function codeIsValid(code: string): Promise<boolean> {
-  const record = await kv.getJSON<CodeRecord>(key(code));
+  const record = await storedForPlaintext(code);
   return !!record && record.enabled;
 }
 
-/**
- * Bump usage counters for a code. Read-modify-write (not atomic) — fine at
- * personal-project traffic where concurrent writes to the same code are rare;
- * a lost increment only undercounts a stat, it never affects access.
- */
-async function bump(code: string, patch: Partial<CodeRecord>): Promise<void> {
-  const record = await kv.getJSON<CodeRecord>(key(code));
-  if (!record) return;
-  await kv.setJSON(key(code), {
-    ...record,
-    sessions: record.sessions + (patch.sessions ?? 0),
-    runs: record.runs + (patch.runs ?? 0),
-    seconds: record.seconds + (patch.seconds ?? 0),
-    lastUsed: new Date().toISOString(),
-  });
+async function bump(
+  code: string,
+  field: "sessions" | "runs" | "seconds",
+  amount: number,
+): Promise<void> {
+  const record = await storedForPlaintext(code);
+  if (!record || !record.enabled) return;
+  await Promise.all([
+    kv.incrBy(usageKey(record.id, field), Math.max(0, Math.round(amount))),
+    kv.setJSON(lastUsedKey(record.id), new Date().toISOString()),
+  ]);
 }
 
-export const recordSession = (code: string) => bump(code, { sessions: 1 });
-export const recordRun = (code: string) => bump(code, { runs: 1 });
+export const recordSession = (code: string) => bump(code, "sessions", 1);
+export const recordRun = (code: string) => bump(code, "runs", 1);
 export const recordSeconds = (code: string, seconds: number) =>
-  bump(code, { seconds: Math.max(0, Math.round(seconds)) });
+  bump(code, "seconds", seconds);

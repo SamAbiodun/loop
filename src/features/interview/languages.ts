@@ -41,8 +41,8 @@ export function languageLabel(langId: string): string {
 // commented sample call. Design problems (MinStack, …) render the class itself
 // plus an entry point. Unparseable signatures fall back to `stub`.
 //
-// Note: custom node types (ListNode/TreeNode/…) are referenced by the signature
-// but their definitions are not emitted.
+// Known custom node types (ListNode/TreeNode/RNode/GraphNode) are emitted in
+// each target language so every generated starter is independently runnable.
 // ---------------------------------------------------------------------------
 
 type ParsedType = {
@@ -170,6 +170,91 @@ const wrap = (s: string, depth: number, open: string, close: string) => {
   return s;
 };
 const isVoid = (t: ParsedType) => t.base === "void";
+
+type HelperName = "ListNode" | "TreeNode" | "RNode" | "GraphNode";
+
+function helperNames(src: string): HelperName[] {
+  return (["ListNode", "TreeNode", "RNode", "GraphNode"] as HelperName[]).filter(
+    (name) => src.includes(`class ${name}`),
+  );
+}
+
+const HELPER_DEFINITIONS: Record<string, Record<HelperName, string>> = {
+  java: {
+    ListNode:
+      "class ListNode { int val; ListNode next; ListNode(int val) { this.val = val; } }",
+    TreeNode:
+      "class TreeNode { int val; TreeNode left, right; TreeNode(int val) { this.val = val; } }",
+    RNode:
+      "class RNode { int val; RNode next, random; RNode(int val) { this.val = val; } }",
+    GraphNode:
+      "class GraphNode { int val; List<GraphNode> neighbors = new ArrayList<>(); GraphNode(int val) { this.val = val; } }",
+  },
+  cpp: {
+    ListNode:
+      "struct ListNode { int val; ListNode* next; ListNode(int x = 0) : val(x), next(nullptr) {} };",
+    TreeNode:
+      "struct TreeNode { int val; TreeNode* left; TreeNode* right; TreeNode(int x = 0) : val(x), left(nullptr), right(nullptr) {} };",
+    RNode:
+      "struct RNode { int val; RNode* next; RNode* random; RNode(int x = 0) : val(x), next(nullptr), random(nullptr) {} };",
+    GraphNode:
+      "struct GraphNode { int val; vector<GraphNode*> neighbors; GraphNode(int x = 0) : val(x) {} };",
+  },
+  csharp: {
+    ListNode:
+      "public class ListNode { public int val; public ListNode? next; public ListNode(int val = 0) { this.val = val; } }",
+    TreeNode:
+      "public class TreeNode { public int val; public TreeNode? left; public TreeNode? right; public TreeNode(int val = 0) { this.val = val; } }",
+    RNode:
+      "public class RNode { public int val; public RNode? next; public RNode? random; public RNode(int val = 0) { this.val = val; } }",
+    GraphNode:
+      "public class GraphNode { public int val; public List<GraphNode> neighbors = new(); public GraphNode(int val = 0) { this.val = val; } }",
+  },
+  go: {
+    ListNode: "type ListNode struct {\n    Val int\n    Next *ListNode\n}",
+    TreeNode:
+      "type TreeNode struct {\n    Val int\n    Left *TreeNode\n    Right *TreeNode\n}",
+    RNode:
+      "type RNode struct {\n    Val int\n    Next *RNode\n    Random *RNode\n}",
+    GraphNode:
+      "type GraphNode struct {\n    Val int\n    Neighbors []*GraphNode\n}",
+  },
+  rust: {
+    ListNode:
+      "#[derive(Clone, Debug)]\nstruct ListNode {\n    val: i32,\n    next: Option<Box<ListNode>>,\n}",
+    TreeNode:
+      "#[derive(Clone, Debug)]\nstruct TreeNode {\n    val: i32,\n    left: Option<Box<TreeNode>>,\n    right: Option<Box<TreeNode>>,\n}",
+    RNode:
+      "#[derive(Clone, Debug)]\nstruct RNode {\n    val: i32,\n    next: Option<Box<RNode>>,\n    random: Option<Box<RNode>>,\n}",
+    GraphNode:
+      "#[derive(Clone, Debug)]\nstruct GraphNode {\n    val: i32,\n    neighbors: Vec<GraphNode>,\n}",
+  },
+};
+
+function attachHelpers(langId: string, source: string, rendered: string): string {
+  const names = helperNames(source);
+  const definitions = HELPER_DEFINITIONS[langId];
+  if (!definitions || names.length === 0) return rendered;
+  const helpers = names.map((name) => definitions[name]).join("\n\n");
+  switch (langId) {
+    case "java":
+      return `import java.util.*;\n\n${helpers}\n\n${rendered}`;
+    case "cpp":
+      return rendered.replace(
+        "using namespace std;\n\n",
+        `using namespace std;\n\n${helpers}\n\n`,
+      );
+    case "csharp":
+      return rendered.replace(
+        "using System;\n\n",
+        `using System;\nusing System.Collections.Generic;\n\n${helpers}\n\n`,
+      );
+    case "go":
+      return rendered.replace("package main\n\n", `package main\n\n${helpers}\n\n`);
+    default:
+      return `${helpers}\n\n${rendered}`;
+  }
+}
 
 // --- per-language type rendering ---
 function tsType(t: ParsedType): string {
@@ -363,15 +448,17 @@ const SPECS: Record<string, LangSpec> = {
   },
 };
 
-function buildStarter(spec: LangSpec, ts: string): string | null {
+function buildStarter(langId: string, spec: LangSpec, ts: string): string | null {
   // A `function` declaration means it's function-style; render those and ignore
   // helper type-defs (ListNode, TreeNode, …) that may precede them.
   if (/\bfunction\s+\w+\s*\(/.test(ts)) {
     const fns = parseFunctions(ts);
-    return fns.length ? spec.functions(fns) : null;
+    return fns.length ? attachHelpers(langId, ts, spec.functions(fns)) : null;
   }
   const cls = parseClass(ts);
-  return cls && cls.methods.length ? spec.design(cls) : null;
+  return cls && cls.methods.length
+    ? attachHelpers(langId, ts, spec.design(cls))
+    : null;
 }
 
 /** Starter content for a language: the problem's typed starter for TypeScript,
@@ -382,5 +469,5 @@ export function starterFor(langId: string, typescriptStarter: string): string {
   const stub = LANGUAGES.find((l) => l.id === langId)?.stub ?? "";
   const spec = SPECS[langId];
   if (!spec) return stub;
-  return buildStarter(spec, typescriptStarter) ?? stub;
+  return buildStarter(langId, spec, typescriptStarter) ?? stub;
 }

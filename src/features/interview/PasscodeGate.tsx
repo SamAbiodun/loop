@@ -1,8 +1,24 @@
 "use client";
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 
 type Status = "checking" | "locked" | "unlocked";
+type GateContextValue = { required: boolean; logout: () => Promise<void> };
+const GateContext = createContext<GateContextValue>({
+  required: false,
+  logout: async () => {},
+});
+
+export function usePasscodeGate() {
+  return useContext(GateContext);
+}
 
 /**
  * Shared-passcode gate. On mount it asks /api/unlock whether a passcode is
@@ -16,6 +32,7 @@ export function PasscodeGate({ children }: { children: ReactNode }) {
   const [passcode, setPasscode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [required, setRequired] = useState(false);
 
   // Access-request form (shown when a locked-out visitor has no code).
   const [requesting, setRequesting] = useState(false);
@@ -51,12 +68,41 @@ export function PasscodeGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     fetch("/api/unlock")
-      .then((r) => r.json())
-      .then((d: { required: boolean; unlocked: boolean }) => {
+      .then(async (response) => {
+        const data = (await response.json()) as {
+          required: boolean;
+          unlocked: boolean;
+          error?: string;
+        };
+        if (!response.ok) throw new Error(data.error ?? "Access gate unavailable.");
+        return data;
+      })
+      .then((d) => {
+        setRequired(d.required);
         setStatus(!d.required || d.unlocked ? "unlocked" : "locked");
       })
-      .catch(() => setStatus("locked"));
+      .catch((cause: unknown) => {
+        setError(cause instanceof Error ? cause.message : "Access gate unavailable.");
+        setStatus("locked");
+      });
   }, []);
+
+  useEffect(() => {
+    const onLocked = () => {
+      setRequired(true);
+      setError("This access code is no longer valid. Enter another code.");
+      setStatus("locked");
+    };
+    window.addEventListener("loop:locked", onLocked);
+    return () => window.removeEventListener("loop:locked", onLocked);
+  }, []);
+
+  async function logout() {
+    await fetch("/api/unlock", { method: "DELETE" });
+    setPasscode("");
+    setError(null);
+    setStatus(required ? "locked" : "unlocked");
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -81,7 +127,13 @@ export function PasscodeGate({ children }: { children: ReactNode }) {
     }
   }
 
-  if (status === "unlocked") return <>{children}</>;
+  if (status === "unlocked") {
+    return (
+      <GateContext.Provider value={{ required, logout }}>
+        {children}
+      </GateContext.Provider>
+    );
+  }
 
   if (status === "checking") {
     return (

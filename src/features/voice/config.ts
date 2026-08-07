@@ -13,6 +13,16 @@ export const REALTIME_MODELS = {
   hard: "gpt-realtime-2.1",
 } as const;
 
+export type RealtimeModel = (typeof REALTIME_MODELS)[keyof typeof REALTIME_MODELS];
+
+/** Server-safe guard: never trust a model slug supplied by the browser. */
+export function isAllowedRealtimeModel(model: unknown): model is RealtimeModel {
+  return (
+    typeof model === "string" &&
+    (Object.values(REALTIME_MODELS) as string[]).includes(model)
+  );
+}
+
 export type InterviewMode = keyof typeof REALTIME_MODELS;
 
 /** The modes pick which model powers the interviewer — same problems, same

@@ -41,6 +41,16 @@ export const CATEGORIES = [
   "Bit Manipulation",
 ] as const;
 
+/**
+ * Exact platform-specific numeric bounds are intentionally omitted from the
+ * candidate view. These rules keep the interview honest without inviting the
+ * model to invent missing constraints.
+ */
+export const DEFAULT_INTERVIEW_CONSTRAINTS = [
+  "Use the function signature and statement as the source of truth for input types and validity.",
+  "If an exact size bound affects the approach, state a reasonable assumption and confirm it with the interviewer.",
+];
+
 const fn = (sig: string) => `function ${sig} {\n\n}`;
 
 const listNode = `class ListNode {
@@ -75,7 +85,7 @@ const p = (
   statement: string,
   targetComplexity: string,
   starterCode: string,
-  constraints: string[] = [],
+  constraints: string[] = DEFAULT_INTERVIEW_CONSTRAINTS,
 ): Problem => ({
   id,
   title,
@@ -591,7 +601,13 @@ export const PROBLEMS: Problem[] = [
 /** Opt-in pool from the open APPS dataset (built by scripts/build-problems.mjs). */
 export const OPEN_PROBLEMS: Problem[] = (
   openProblemsRaw as unknown as Problem[]
-).map((prob) => ({ ...prob, examples: prob.examples ?? [] }));
+).map((prob) => ({
+  ...prob,
+  constraints: prob.constraints?.length
+    ? prob.constraints
+    : DEFAULT_INTERVIEW_CONSTRAINTS,
+  examples: prob.examples ?? [],
+}));
 
 export const OPEN_CATEGORY = "Open Dataset (APPS · interview)";
 

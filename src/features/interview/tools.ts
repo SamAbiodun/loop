@@ -2,6 +2,7 @@ import { z } from "zod";
 import { tool } from "@openai/agents/realtime";
 
 export type EditorState = { code: string; language: string };
+const MAX_EDITOR_CHARS = 100_000;
 
 export function createGetEditorStateTool(getState: () => EditorState) {
   return tool({
@@ -13,7 +14,11 @@ export function createGetEditorStateTool(getState: () => EditorState) {
       const { code, language } = getState();
       return {
         language,
-        code: code.trim().length === 0 ? "(the editor is empty)" : code,
+        code:
+          code.trim().length === 0
+            ? "(the editor is empty)"
+            : code.slice(0, MAX_EDITOR_CHARS),
+        truncated: code.length > MAX_EDITOR_CHARS,
       };
     },
   });
@@ -55,7 +60,10 @@ export function createEditCodeTool(onEdit: (code: string) => void) {
     description:
       "Replace the entire contents of the candidate's code editor. Pass the COMPLETE new file contents (not a diff). Use this to scaffold, correct, or demonstrate code in the editor — stay in your interviewer role and don't hand over the full solution unprompted.",
     parameters: z.object({
-      code: z.string().describe("The full new contents of the editor."),
+      code: z
+        .string()
+        .max(MAX_EDITOR_CHARS)
+        .describe("The full new contents of the editor."),
     }),
     execute: async ({ code }) => {
       onEdit(code);
