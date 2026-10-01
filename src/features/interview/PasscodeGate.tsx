@@ -87,6 +87,26 @@ export function PasscodeGate({ children }: { children: ReactNode }) {
       });
   }, []);
 
+  // If the admin opens public access while someone is sitting at the gate,
+  // let them through without requiring a manual refresh. Paid routes still
+  // enforce the setting independently on every request.
+  useEffect(() => {
+    if (status !== "locked") return;
+    const interval = window.setInterval(() => {
+      fetch("/api/unlock", { cache: "no-store" })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((data: { required?: boolean; unlocked?: boolean } | null) => {
+          if (data && data.required === false) {
+            setRequired(false);
+            setError(null);
+            setStatus("unlocked");
+          }
+        })
+        .catch(() => undefined);
+    }, 30_000);
+    return () => window.clearInterval(interval);
+  }, [status]);
+
   useEffect(() => {
     const onLocked = () => {
       setRequired(true);

@@ -1,7 +1,7 @@
 /**
  * Access control for the paid routes and the admin panel.
  *
- * Gate mode is resolved from the environment:
+ * Base gate mode is resolved from the environment:
  *   - "codes"    — ADMIN_PASSCODE is set: the multi-code system in
  *                  src/lib/codes.ts is the source of truth (generate/disable
  *                  per code, track usage), managed via /admin. This is the
@@ -14,20 +14,26 @@
  *                  passcode (legacy fallback, no usage tracking).
  *   - "open"     — neither configured: the app runs open (local dev).
  *
- * The gate cookie is re-validated against the source of truth on EVERY paid
- * request, so disabling or deleting a code locks its holder out immediately.
+ * In codes mode, an admin-controlled Redis setting can temporarily make the
+ * visitor experience public without removing ADMIN_PASSCODE or deleting any
+ * codes. The admin panel always stays protected.
+ *
+ * The effective gate state and gate cookie are re-validated against the source
+ * of truth on EVERY paid request, so public/codes mode changes and code
+ * revocations take effect immediately.
  *
  * Server-only.
  */
 import { createHash, timingSafeEqual } from "crypto";
 import type { NextRequest } from "next/server";
 import { codeIsValid, normalizeCode } from "./codes";
-import { kvIsPersistent } from "./kv";
+import { kv, kvIsPersistent } from "./kv";
 
 export const GATE_COOKIE = "loop_gate";
 export const ADMIN_COOKIE = "loop_admin";
 
 type GateMode = "codes" | "passcode" | "open";
+const PUBLIC_ACCESS_KEY = "settings:public-access";
 
 export function gateMode(): GateMode {
   if (process.env.ADMIN_PASSCODE) return "codes";
@@ -35,9 +41,23 @@ export function gateMode(): GateMode {
   return "open";
 }
 
-/** Whether visitors must enter a passcode at all. */
-export function gateRequired(): boolean {
-  return gateMode() !== "open";
+/** Whether the admin has temporarily opened codes mode to all visitors. */
+export async function publicAccessEnabled(): Promise<boolean> {
+  if (gateMode() !== "codes") return gateMode() === "open";
+  return (await kv.getJSON<boolean>(PUBLIC_ACCESS_KEY)) === true;
+}
+
+/** Persistently open or close visitor access. Admin authentication is separate. */
+export async function setPublicAccessEnabled(enabled: boolean): Promise<void> {
+  await kv.setJSON(PUBLIC_ACCESS_KEY, enabled);
+}
+
+/** Whether visitors must enter a passcode at all. Fails closed on store errors. */
+export async function gateRequired(): Promise<boolean> {
+  const mode = gateMode();
+  if (mode === "open") return false;
+  if (mode === "passcode") return true;
+  return !(await publicAccessEnabled());
 }
 
 /** Deployed codes mode must never silently use per-instance memory. */
@@ -75,8 +95,12 @@ export async function validatePasscode(passcode: string): Promise<string | null>
 export type UnlockState = { unlocked: boolean; code: string | null };
 
 /** Read the gate cookie and re-check it against the live source of truth. */
-export async function unlockState(request: NextRequest): Promise<UnlockState> {
-  if (gateMode() === "open") return { unlocked: true, code: null };
+export async function unlockState(
+  request: NextRequest,
+  required?: boolean,
+): Promise<UnlockState> {
+  const mustUnlock = required ?? (await gateRequired());
+  if (!mustUnlock) return { unlocked: true, code: null };
   const cookie = request.cookies.get(GATE_COOKIE)?.value ?? "";
   const code = await validatePasscode(cookie);
   return { unlocked: code !== null, code };

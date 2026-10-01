@@ -48,6 +48,35 @@ export function AdminPanel() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [persistent, setPersistent] = useState(true);
   const [requests, setRequests] = useState<AccessRequest[]>([]);
+  const [publicAccess, setPublicAccess] = useState(false);
+  const [accessBusy, setAccessBusy] = useState(false);
+  const [settingsStatus, setSettingsStatus] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
+  const [confirmingPublicAccess, setConfirmingPublicAccess] = useState(false);
+
+  const loadSettings = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/settings", { cache: "no-store" });
+      if (res.ok) {
+        const data = (await res.json()) as { publicAccess: boolean };
+        if (typeof data.publicAccess === "boolean") {
+          setPublicAccess(data.publicAccess);
+          setSettingsStatus("ready");
+        } else {
+          setSettingsStatus("error");
+          setActionError("Unable to load access settings.");
+        }
+      } else {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        setSettingsStatus("error");
+        setActionError(data.error ?? "Unable to load access settings.");
+      }
+    } catch {
+      setSettingsStatus("error");
+      setActionError("Unable to load access settings.");
+    }
+  }, []);
 
   const loadRequests = useCallback(async () => {
     const res = await fetch("/api/admin/requests");
@@ -70,8 +99,35 @@ export function AdminPanel() {
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       setActionError(data.error ?? "Unable to load access codes.");
     }
-    void loadRequests();
-  }, [loadRequests]);
+    void Promise.all([loadRequests(), loadSettings()]);
+  }, [loadRequests, loadSettings]);
+
+  async function updatePublicAccess(next: boolean) {
+    if (settingsStatus !== "ready") return;
+    setAccessBusy(true);
+    setActionError(null);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ publicAccess: next }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        publicAccess?: boolean;
+        error?: string;
+      };
+      if (!res.ok || typeof data.publicAccess !== "boolean") {
+        setActionError(data.error ?? "Unable to update visitor access.");
+        return;
+      }
+      setPublicAccess(data.publicAccess);
+      setConfirmingPublicAccess(false);
+    } catch {
+      setActionError("Unable to update visitor access.");
+    } finally {
+      setAccessBusy(false);
+    }
+  }
 
   async function dismissRequest(id: string) {
     setActionError(null);
@@ -230,7 +286,7 @@ export function AdminPanel() {
   return (
     <div className="mx-auto max-w-4xl p-6">
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-semibold tracking-tight">Access codes</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Access control</h1>
         <div className="flex items-center gap-4">
           <Link href="/" className="text-sm text-neutral-400 hover:text-neutral-200">
             ← app
@@ -257,6 +313,88 @@ export function AdminPanel() {
           Add the Upstash integration on Vercel to persist them.
         </div>
       )}
+
+      <section
+        className={`mb-6 flex flex-col gap-4 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between ${
+          publicAccess
+            ? "border-amber-600/50 bg-amber-950/30"
+            : "border-neutral-800 bg-neutral-900/30"
+        }`}
+      >
+        <div>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-medium text-neutral-100">
+              Visitor access
+            </h2>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ${
+                publicAccess
+                  ? "bg-amber-500/15 text-amber-300"
+                  : "bg-emerald-500/15 text-emerald-300"
+              }`}
+            >
+              {settingsStatus !== "ready"
+                ? settingsStatus === "error"
+                  ? "Unavailable"
+                  : "Checking"
+                : publicAccess
+                  ? "Public"
+                  : "Codes required"}
+            </span>
+          </div>
+          <p className="mt-1 max-w-xl text-xs leading-5 text-neutral-400">
+            {publicAccess
+              ? "Anyone with the URL can use interviews and code execution. The admin panel remains protected."
+              : "Visitors must enter an enabled access code. You can open the app publicly at any time without deleting codes."}
+          </p>
+        </div>
+        {confirmingPublicAccess && !publicAccess ? (
+          <div className="shrink-0 space-y-2 sm:text-right">
+            <p className="max-w-xs text-xs text-amber-300">
+              Anyone with the URL will be able to start paid voice sessions.
+            </p>
+            <div className="flex gap-2 sm:justify-end">
+              <button
+                type="button"
+                disabled={accessBusy}
+                onClick={() => void updatePublicAccess(true)}
+                className="rounded-lg bg-amber-500 px-3.5 py-2 text-sm font-medium text-neutral-950 hover:bg-amber-400 disabled:opacity-50"
+              >
+                {accessBusy ? "Opening…" : "Yes, open access"}
+              </button>
+              <button
+                type="button"
+                disabled={accessBusy}
+                onClick={() => setConfirmingPublicAccess(false)}
+                className="rounded-lg border border-neutral-700 px-3.5 py-2 text-sm text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            disabled={accessBusy || settingsStatus !== "ready"}
+            onClick={() =>
+              publicAccess
+                ? void updatePublicAccess(false)
+                : setConfirmingPublicAccess(true)
+            }
+            className={`shrink-0 rounded-lg border px-3.5 py-2 text-sm font-medium disabled:opacity-50 ${
+              publicAccess
+                ? "border-neutral-600 text-neutral-200 hover:bg-neutral-800"
+                : "border-amber-600/60 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20"
+            }`}
+          >
+            {accessBusy
+              ? "Updating…"
+              : publicAccess
+                ? "Require access codes"
+                : "Open to everyone"}
+          </button>
+        )}
+      </section>
 
       {requests.length > 0 && (
         <div className="mb-6 rounded-xl border border-blue-800/50 bg-blue-950/20">

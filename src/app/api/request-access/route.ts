@@ -21,7 +21,7 @@ export const runtime = "nodejs";
  * the UI never shows an error on an open deployment.
  */
 export async function POST(request: NextRequest) {
-  if (!gateRequired()) return NextResponse.json({ ok: true });
+  if (!(await gateRequired())) return NextResponse.json({ ok: true });
   const configurationError = gateConfigurationError();
   if (configurationError) {
     return NextResponse.json({ error: configurationError }, { status: 503 });

@@ -47,6 +47,7 @@ src/
     api/usage/route.ts       POST /api/usage — connect/finalize authenticated voice usage
     api/admin/unlock         admin sign-in
     api/admin/codes          list / generate / enable-disable / delete access codes
+    api/admin/settings       switch visitor access between codes and public
     admin/page.tsx           the /admin access-code dashboard
     layout.tsx page.tsx globals.css
   features/
@@ -156,6 +157,9 @@ holder out immediately, even mid-visit.
 
 Manage codes at **`/admin`** (sign in with `ADMIN_PASSCODE`):
 
+- Switch **Visitor access** between **Codes required** and **Public** without a
+  redeploy. Public mode bypasses visitor codes immediately but keeps `/admin`
+  protected; switching codes back on is enforced on the next paid request.
 - **Generate** a new code with a label (e.g. "Recruiter — Acme"). Its plaintext
   is shown once so it can be shared; only a SHA-256 digest and masked display
   value are retained afterward. Existing legacy plaintext records are migrated

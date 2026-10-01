@@ -31,8 +31,12 @@ export async function GET(request: NextRequest) {
       { status: 503 },
     );
   }
-  const { unlocked } = await unlockState(request);
-  return NextResponse.json({ required: gateRequired(), unlocked });
+  const required = await gateRequired();
+  const { unlocked } = await unlockState(request, required);
+  return NextResponse.json(
+    { required, unlocked },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }
 
 export async function POST(request: NextRequest) {
@@ -40,6 +44,8 @@ export async function POST(request: NextRequest) {
   if (configurationError) {
     return NextResponse.json({ error: configurationError }, { status: 503 });
   }
+
+  if (!(await gateRequired())) return NextResponse.json({ unlocked: true });
 
   const limit = await checkRateLimit({
     bucket: "gate-unlock-15m",
@@ -59,7 +65,6 @@ export async function POST(request: NextRequest) {
   }
 
   const code = await validatePasscode(passcode);
-  if (!gateRequired()) return NextResponse.json({ unlocked: true });
   if (!code) {
     return NextResponse.json({ error: "Incorrect passcode." }, { status: 401 });
   }
