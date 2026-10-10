@@ -24,7 +24,9 @@ import {
   createGetEditorStateTool,
   createGetTimeTool,
   createHintTool,
+  createSetPhaseTool,
   type EditorState,
+  type Phase,
   type TimeState,
 } from "./tools";
 
@@ -34,12 +36,17 @@ type InterviewSessionOptions = {
   /** Noise-gated mic stream (micGate.ts). Omitted → the transport captures
    *  the default microphone itself (fallback when mic access fails early). */
   micStream?: MediaStream;
+  /** Element the transport plays the interviewer through. Supplying one lets
+   *  the room meter the interviewer's audio. Omitted → the transport makes its own. */
+  audioElement?: HTMLAudioElement;
   getEditorState: () => EditorState;
   /** Live session-clock state so the interviewer can pace itself. */
   getTimeRemaining: () => TimeState;
   onHintRequested: () => void;
   onEndSession: () => void;
   onEditCode: (code: string) => void;
+  /** Silent set_phase tool: the interviewer reports which phase it is in. */
+  onPhase: (phase: Phase) => void;
 };
 
 /**
@@ -51,11 +58,13 @@ export function createInterviewSession({
   problem,
   mode,
   micStream,
+  audioElement,
   getEditorState,
   getTimeRemaining,
   onHintRequested,
   onEndSession,
   onEditCode,
+  onPhase,
 }: InterviewSessionOptions) {
   const { code, language } = getEditorState();
 
@@ -74,11 +83,15 @@ export function createInterviewSession({
       createHintTool(onHintRequested),
       createEditCodeTool(onEditCode),
       createEndTool(onEndSession),
+      createSetPhaseTool(onPhase),
     ],
   });
 
   const session = new RealtimeSession(agent, {
-    transport: new OpenAIRealtimeWebRTC({ mediaStream: micStream }),
+    transport: new OpenAIRealtimeWebRTC({
+      mediaStream: micStream,
+      audioElement,
+    }),
     model: REALTIME_MODELS[mode],
     config: {
       outputModalities: ["audio"],

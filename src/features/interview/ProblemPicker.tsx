@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Button, Frame, Icon, Label, Logo, Pill, Statement } from "@/components/ui";
 import {
   DEFAULT_MODE,
   MODE_DESCRIPTIONS,
@@ -9,10 +10,10 @@ import {
   type InterviewMode,
 } from "@/features/voice";
 import {
+  CATEGORIES,
   OPEN_PROBLEMS,
   PROBLEMS,
   groupByCategory,
-  type Difficulty,
   type Problem,
 } from "./problems";
 import { usePasscodeGate } from "./PasscodeGate";
@@ -22,12 +23,15 @@ type ProblemPickerProps = {
 };
 
 const MODES = Object.keys(REALTIME_MODELS) as InterviewMode[];
+const READOUT = `${PROBLEMS.length} problems · ${CATEGORIES.length} categories`;
 
-const DIFFICULTY_STYLE: Record<Difficulty, string> = {
-  Easy: "bg-raised text-ink",
-  Medium: "bg-raised text-ink",
-  Hard: "bg-raised text-ink",
-};
+// Faint 2px dot matrix behind the hero only; sits under the text, g-2 on paper.
+const DOT_MATRIX = {
+  backgroundImage: "radial-gradient(var(--g-2) 1px, transparent 1.2px)",
+  backgroundSize: "18px 18px",
+  maskImage: "linear-gradient(to bottom, black 55%, transparent)",
+  WebkitMaskImage: "linear-gradient(to bottom, black 55%, transparent)",
+} as const;
 
 function matches(p: Problem, q: string): boolean {
   if (!q) return true;
@@ -52,146 +56,134 @@ export function ProblemPicker({ onStart }: ProblemPickerProps) {
   );
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-5">
-      <header>
-        <div className="flex items-start justify-between gap-4">
-        <h1 className="flex items-center gap-3 text-3xl font-medium tracking-tight">
-          <svg
-            aria-hidden
-            viewBox="0 0 32 32"
-            className="h-8 w-8 shrink-0 rounded-md bg-live"
-          >
-            <g fill="var(--live-fg)">
-              <circle cx="16" cy="5.5" r="2.1" />
-              <circle cx="20.02" cy="6.3" r="2.1" />
-              <circle cx="23.42" cy="8.58" r="2.1" />
-              <circle cx="25.7" cy="11.98" r="2.1" />
-              <circle cx="26.5" cy="16" r="2.1" />
-              <circle cx="25.7" cy="20.02" r="2.1" />
-              <circle cx="23.42" cy="23.42" r="2.1" />
-              <circle cx="20.02" cy="25.7" r="2.1" />
-              <circle cx="16" cy="26.5" r="2.1" />
-              <circle cx="11.98" cy="25.7" r="2.1" />
-              <circle cx="8.58" cy="23.42" r="2.1" />
-              <circle cx="6.3" cy="20.02" r="2.1" />
-              <circle cx="5.5" cy="16" r="2.1" />
-            </g>
-            <g fill="var(--ink-subtle)">
-              <circle cx="6.3" cy="11.98" r="1.3" />
-              <circle cx="8.58" cy="8.58" r="1.3" />
-              <circle cx="11.98" cy="6.3" r="1.3" />
-            </g>
-          </svg>
-          <span>loop</span>
-          <span className="font-normal text-ink-muted"> · DSA voice interviews</span>
-        </h1>
-          {gate.required && (
-            <button
-              type="button"
-              onClick={() => void gate.logout()}
-              className="mt-1 text-xs text-ink-subtle hover:text-ink"
-            >
-              Sign out
-            </button>
-          )}
+    <div data-theme="paper" className="bg-bg text-ink min-h-screen">
+      <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col border-x border-line">
+        <div className="flex items-center justify-between border-b border-line px-6 py-4">
+          <Logo size={28} />
+          <div className="flex items-center gap-4">
+            <Label className="text-ink-subtle">{READOUT}</Label>
+            {gate.required && (
+              <Button variant="ghost" size="sm" onClick={() => void gate.logout()}>
+                Sign out
+              </Button>
+            )}
+          </div>
         </div>
-        <p className="mt-2 text-sm text-ink-muted">
-          Talk through a problem out loud with an AI interviewer — it listens,
-          probes your reasoning, and watches your code as you write it.
-        </p>
-      </header>
 
-      <div className="flex flex-col gap-2">
-        <span className="text-xs uppercase tracking-wide text-ink-subtle">
-          Interviewer model
-        </span>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {MODES.map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setMode(m)}
-              className={`rounded-xl border p-3 text-left transition-colors ${
-                mode === m
-                  ? "border-ink-muted bg-raised"
-                  : "border-line bg-surface hover:border-line-strong hover:bg-surface"
-              }`}
-            >
-              <span
-                className={`block text-sm font-medium ${
-                  mode === m ? "text-ink" : "text-ink"
-                }`}
-              >
-                {MODE_LABELS[m]}
-              </span>
-              <span className="mt-1 block text-xs leading-relaxed text-ink-subtle">
-                {MODE_DESCRIPTIONS[m]}
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
+        <header className="relative overflow-hidden border-b border-line px-6 py-14 sm:px-10 sm:py-20">
+          <div aria-hidden className="absolute inset-0 opacity-70" style={DOT_MATRIX} />
+          <div className="relative flex max-w-2xl flex-col gap-5">
+            <Label>NeetCode 150 · 18 categories</Label>
+            <Statement className="text-[40px] font-normal sm:text-[56px] sm:font-light">
+              Pick a problem.
+            </Statement>
+            <p className="font-sans text-base leading-relaxed text-ink-muted sm:text-lg">
+              Every one written to be read aloud.
+            </p>
+          </div>
+        </header>
 
-      <div className="flex flex-col gap-2">
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search problems — title, category, difficulty…"
-          className="rounded-lg border border-line bg-surface px-3.5 py-2.5 text-sm text-ink outline-none placeholder:text-ink-subtle focus:border-ink-muted focus:ring-2 focus:ring-ink-muted/30"
-        />
-        <div className="flex items-center justify-between text-xs text-ink-subtle">
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={includeOpen}
-              onChange={(e) => setIncludeOpen(e.target.checked)}
-              className="accent-g-2"
-            />
-            Include open-dataset problems ({OPEN_PROBLEMS.length},
-            competitive-style)
-          </label>
-          <span>
-            {total} problem{total === 1 ? "" : "s"} · click one to start
-          </span>
-        </div>
-      </div>
-
-      <div className="max-h-[26rem] overflow-y-auto rounded-xl border border-line bg-surface">
-        {total === 0 ? (
-          <p className="p-4 text-sm text-ink-subtle">No problems match.</p>
-        ) : (
-          groups.map(([category, problems]) => (
-            <div key={category}>
-              <div className="sticky top-0 border-b border-line bg-surface px-4 py-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-subtle">
-                {category}
-              </div>
-              {problems.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => onStart(p, mode)}
-                  className="group flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm text-ink-muted transition-colors hover:bg-raised hover:text-ink"
-                >
-                  <span>{p.title}</span>
-                  <span className="flex items-center gap-2">
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${DIFFICULTY_STYLE[p.difficulty]}`}
-                    >
-                      {p.difficulty}
+        <main className="flex flex-1 flex-col gap-10 px-6 py-10 sm:px-10">
+          <section className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <Label>interviewer</Label>
+              <Label className="text-ink-subtle">{REALTIME_MODELS[mode]}</Label>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {MODES.map((m) => {
+                const selected = mode === m;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => setMode(m)}
+                    className={`flex items-start justify-between gap-4 rounded-lg border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-muted/40 ${
+                      selected
+                        ? "border-ink bg-raised"
+                        : "border-line bg-surface hover:border-line-strong"
+                    }`}
+                  >
+                    <span className="flex flex-col gap-1.5">
+                      <span className="font-sans text-sm font-medium text-ink">
+                        {MODE_LABELS[m]}
+                      </span>
+                      <span className="text-xs leading-relaxed text-ink-muted">
+                        {MODE_DESCRIPTIONS[m]}
+                      </span>
                     </span>
                     <span
                       aria-hidden
-                      className="text-ink-subtle transition-transform group-hover:translate-x-0.5 group-hover:text-ink"
+                      className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
+                        selected ? "border-ink bg-ink text-bg" : "border-line-strong"
+                      }`}
                     >
-                      ›
+                      {selected && <Icon name="check" size={10} strokeWidth={2.5} />}
                     </span>
-                  </span>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
             </div>
-          ))
-        )}
+          </section>
+
+          <section className="flex flex-col gap-3">
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by title, category or difficulty"
+              className="h-11 rounded-lg border border-line-strong bg-raised px-3.5 font-sans text-sm text-ink outline-none placeholder:text-ink-subtle focus:border-ink focus-visible:ring-2 focus-visible:ring-ink-muted/30"
+            />
+            <label className="flex items-center gap-2 text-xs text-ink-muted">
+              <input
+                type="checkbox"
+                checked={includeOpen}
+                onChange={(e) => setIncludeOpen(e.target.checked)}
+                className="h-3.5 w-3.5 accent-g-8"
+              />
+              Include open-dataset problems ({OPEN_PROBLEMS.length}, competitive-style)
+            </label>
+          </section>
+
+          <Frame caption="problems" readout={String(total)}>
+            <div className="max-h-[32rem] overflow-y-auto bg-surface">
+              {total === 0 ? (
+                <p className="p-5 text-sm text-ink-muted">No problems match.</p>
+              ) : (
+                groups.map(([category, problems]) => (
+                  <div key={category}>
+                    <div className="sticky top-0 z-10 border-b border-line bg-surface px-4 py-2">
+                      <Label>{category}</Label>
+                    </div>
+                    {problems.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => onStart(p, mode)}
+                        className="group flex w-full items-center justify-between gap-3 border-b border-line px-4 py-3 text-left font-sans text-sm text-ink transition-colors last:border-b-0 hover:bg-raised focus-visible:bg-raised focus-visible:outline-none"
+                      >
+                        <span>{p.title}</span>
+                        <span className="flex items-center gap-3">
+                          <Pill>{p.difficulty}</Pill>
+                          <Icon
+                            name="chevronRight"
+                            className="text-ink-subtle opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+                          />
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ))
+              )}
+            </div>
+          </Frame>
+        </main>
+
+        <footer className="flex items-center justify-between border-t border-line px-6 py-4 sm:px-10">
+          <Label className="text-ink-subtle">loop · voice DSA interviews</Label>
+          <Label className="text-ink-subtle">step 1 of 2 · pick</Label>
+        </footer>
       </div>
     </div>
   );

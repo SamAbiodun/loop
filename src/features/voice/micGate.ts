@@ -93,3 +93,48 @@ export async function createGatedMic(thresholdDb: number): Promise<GatedMic> {
     },
   };
 }
+
+export type LevelReader = {
+  /** Latest input level in dBFS (about -90 silent … 0 clipping). */
+  getLevelDb: () => number;
+  /** AudioContexts start suspended until a user gesture; call from a click. */
+  resume: () => Promise<void>;
+  /** Tear down the analyser. Does NOT stop the stream's tracks. */
+  dispose: () => void;
+};
+
+/**
+ * Read-only level meter for a stream you already hold (the mic check screen).
+ * Same RMS → dBFS measurement as the gate above, no gating, no ownership of
+ * the tracks: the caller stops them.
+ */
+export function createLevelReader(stream: MediaStream): LevelReader {
+  const ctx = new AudioContext();
+  const source = ctx.createMediaStreamSource(stream);
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  source.connect(analyser);
+
+  const samples = new Float32Array(analyser.fftSize);
+  let levelDb = -Infinity;
+
+  const timer = setInterval(() => {
+    analyser.getFloatTimeDomainData(samples);
+    let sum = 0;
+    for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+    const rms = Math.sqrt(sum / samples.length);
+    levelDb = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+  }, TICK_MS);
+
+  return {
+    getLevelDb: () => levelDb,
+    resume: async () => {
+      if (ctx.state === "suspended") await ctx.resume();
+    },
+    dispose: () => {
+      clearInterval(timer);
+      source.disconnect();
+      void ctx.close();
+    },
+  };
+}

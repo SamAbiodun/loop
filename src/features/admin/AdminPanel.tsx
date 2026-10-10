@@ -2,6 +2,10 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Button, Frame, Icon, Label, Logo, Statement } from "@/components/ui";
+import { Input } from "@/features/admin/ui/Field";
+import { Notice } from "@/features/admin/ui/Notice";
+import { Checking } from "@/features/admin/ui/Checking";
 
 type CodeRecord = {
   id: string;
@@ -26,7 +30,7 @@ type AccessRequest = {
 type Gate = "checking" | "disabled" | "locked" | "authed";
 
 function fmtWhen(iso: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return "never";
   const d = new Date(iso);
   return d.toLocaleString(undefined, {
     month: "short",
@@ -45,6 +49,7 @@ export function AdminPanel() {
   const [busy, setBusy] = useState(false);
   const [justCreated, setJustCreated] = useState<string | null>(null);
   const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [persistent, setPersistent] = useState(true);
   const [requests, setRequests] = useState<AccessRequest[]>([]);
@@ -144,7 +149,7 @@ export function AdminPanel() {
   }
 
   function fillFromRequest(r: AccessRequest) {
-    setLabel(`${r.name} — ${r.email}`);
+    setLabel(`${r.name} (${r.email})`);
     if (typeof window !== "undefined") {
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -191,6 +196,7 @@ export function AdminPanel() {
         const d = (await res.json()) as { code: CodeRecord; plaintext: string };
         setJustCreated(d.plaintext);
         setJustCreatedId(d.code.id);
+        setCopied(false);
         setLabel("");
         await loadCodes();
       } else setActionError("Unable to generate a code.");
@@ -230,322 +236,342 @@ export function AdminPanel() {
     } else setActionError("Unable to delete that code.");
   }
 
+  async function copyJustCreated() {
+    if (!justCreated) return;
+    try {
+      await navigator.clipboard.writeText(justCreated);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setActionError("Unable to copy. Select the code and copy it by hand.");
+    }
+  }
+
   async function logout() {
     await fetch("/api/admin/unlock", { method: "DELETE" });
     setPasscode("");
     setGate("locked");
   }
 
+  const accessWord =
+    settingsStatus !== "ready"
+      ? settingsStatus === "error"
+        ? "Unavailable"
+        : "Checking"
+      : publicAccess
+        ? "Public"
+        : "Codes required";
+
   if (gate === "checking") {
-    return (
-      <p className="p-8 text-sm text-ink-subtle">Loading…</p>
-    );
+    return <Checking label="checking admin" />;
   }
 
   if (gate === "disabled") {
     return (
-      <div className="mx-auto max-w-md p-8">
-        <h1 className="text-lg font-semibold">Admin disabled</h1>
-        <p className="mt-2 text-sm text-ink-muted">
-          Set <code className="text-ink">ADMIN_PASSCODE</code> in the
-          environment to enable the access-code panel.
-        </p>
+      <div data-theme="paper" className="min-h-screen bg-bg text-ink">
+        <header className="flex items-center justify-between px-6 py-5 sm:px-10">
+          <Logo size={26} />
+          <Label className="text-ink-subtle">admin</Label>
+        </header>
+        <main className="mx-auto flex w-full max-w-md flex-col gap-6 px-6 pb-24 pt-10 sm:pt-20">
+          <div className="flex flex-col gap-3">
+            <Label>admin</Label>
+            <Statement className="text-4xl sm:text-5xl">Disabled.</Statement>
+            <p className="text-sm leading-6 text-ink-muted">
+              Set <code className="text-ink">ADMIN_PASSCODE</code> in the
+              environment to enable the access-code panel.
+            </p>
+          </div>
+          <hr className="border-line" />
+          <Link href="/" className="inline-flex items-center gap-2 text-sm text-ink-muted hover:text-ink">
+            <Icon name="arrowLeft" size={14} />
+            Back to the app
+          </Link>
+        </main>
       </div>
     );
   }
 
   if (gate === "locked") {
     return (
-      <div className="flex min-h-screen items-center justify-center p-8">
-        <form onSubmit={signIn} className="w-full max-w-sm space-y-5">
-          <div className="space-y-1.5">
-            <h1 className="text-xl font-semibold tracking-tight">Admin</h1>
-            <p className="text-sm text-ink-muted">Enter the admin passcode.</p>
-          </div>
-          <input
-            type="password"
-            value={passcode}
-            onChange={(e) => setPasscode(e.target.value)}
-            autoFocus
-            placeholder="Admin passcode"
-            className="w-full rounded-lg border border-line bg-surface px-3.5 py-2.5 text-sm text-ink outline-none placeholder:text-ink-subtle focus:border-ink-muted focus:ring-2 focus:ring-ink-muted/30"
-          />
-          {error && <p className="text-sm text-ink">{error}</p>}
-          <button
-            type="submit"
-            disabled={!passcode}
-            className="w-full rounded-lg bg-live px-3.5 py-2.5 text-sm font-medium text-live-fg hover:bg-g-2 disabled:opacity-50"
-          >
-            Sign in
-          </button>
-        </form>
+      <div data-theme="paper" className="min-h-screen bg-bg text-ink">
+        <header className="flex items-center justify-between px-6 py-5 sm:px-10">
+          <Logo size={26} />
+          <Label className="text-ink-subtle">admin</Label>
+        </header>
+        <main className="mx-auto flex w-full max-w-md flex-col px-6 pb-24 pt-10 sm:pt-20">
+          <form onSubmit={signIn} className="flex flex-col gap-6">
+            <div className="flex flex-col gap-3">
+              <Label>access</Label>
+              <Statement className="text-4xl sm:text-5xl">Admin.</Statement>
+              <p className="text-sm leading-6 text-ink-muted">
+                Enter the admin passcode.
+              </p>
+            </div>
+            <Input
+              type="password"
+              value={passcode}
+              onChange={(e) => setPasscode(e.target.value)}
+              autoFocus
+              autoComplete="current-password"
+              placeholder="admin passcode"
+              aria-label="Admin passcode"
+              className="h-12 font-mono tracking-[0.18em] placeholder:font-sans placeholder:tracking-normal"
+            />
+            {error && <Notice>{error}</Notice>}
+            <Button type="submit" variant="primary" disabled={!passcode} className="w-full">
+              Sign in
+            </Button>
+          </form>
+          <hr className="my-10 border-line" />
+          <Link href="/" className="inline-flex items-center gap-2 text-sm text-ink-muted hover:text-ink">
+            <Icon name="arrowLeft" size={14} />
+            Back to the app
+          </Link>
+        </main>
       </div>
     );
   }
 
+  const enabledCount = codes.filter((c) => c.enabled).length;
+
   return (
-    <div className="mx-auto max-w-4xl p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-semibold tracking-tight">Access control</h1>
-        <div className="flex items-center gap-4">
-          <Link href="/" className="text-sm text-ink-muted hover:text-ink">
-            ← app
-          </Link>
-          <button
-            type="button"
-            onClick={() => void logout()}
-            className="text-sm text-ink-subtle hover:text-ink"
-          >
-            Sign out
-          </button>
-        </div>
-      </div>
-
-      {actionError && (
-        <div className="mb-4 rounded-lg border border-line-strong bg-raised px-3 py-2 text-sm text-ink">
-          {actionError}
-        </div>
-      )}
-
-      {!persistent && (
-        <div className="mb-4 rounded-lg border border-line-strong bg-raised px-3 py-2 text-xs text-ink">
-          ⚠ No Redis configured — codes live in memory and reset on restart/redeploy.
-          Add the Upstash integration on Vercel to persist them.
-        </div>
-      )}
-
-      <section
-        className={`mb-6 flex flex-col gap-4 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between ${
-          publicAccess
-            ? "border-line-strong bg-raised"
-            : "border-line bg-surface"
-        }`}
-      >
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-medium text-ink">
-              Visitor access
-            </h2>
-            <span
-              className={`rounded-full px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ${
-                publicAccess
-                  ? "bg-raised text-ink"
-                  : "bg-raised text-ink"
-              }`}
-            >
-              {settingsStatus !== "ready"
-                ? settingsStatus === "error"
-                  ? "Unavailable"
-                  : "Checking"
-                : publicAccess
-                  ? "Public"
-                  : "Codes required"}
-            </span>
+    <div data-theme="paper" className="min-h-screen bg-bg text-ink">
+      <header className="border-b border-line">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-4">
+          <Logo size={26} />
+          <div className="flex items-center gap-5">
+            <Label className="hidden sm:inline">access {accessWord.toLowerCase()}</Label>
+            <Label className="hidden sm:inline">{codes.length} codes</Label>
+            <Label className="hidden sm:inline">{requests.length} requests</Label>
+            <Link href="/" className="inline-flex items-center gap-1.5 text-sm text-ink-muted hover:text-ink">
+              <Icon name="arrowLeft" size={14} />
+              app
+            </Link>
+            <Button variant="ghost" size="sm" onClick={() => void logout()}>
+              Sign out
+            </Button>
           </div>
-          <p className="mt-1 max-w-xl text-xs leading-5 text-ink-muted">
-            {publicAccess
-              ? "Anyone with the URL can use interviews and code execution. The admin panel remains protected."
-              : "Visitors must enter an enabled access code. You can open the app publicly at any time without deleting codes."}
-          </p>
         </div>
-        {confirmingPublicAccess && !publicAccess ? (
-          <div className="shrink-0 space-y-2 sm:text-right">
-            <p className="max-w-xs text-xs text-ink">
-              Anyone with the URL will be able to start paid voice sessions.
-            </p>
-            <div className="flex gap-2 sm:justify-end">
-              <button
-                type="button"
-                disabled={accessBusy}
-                onClick={() => void updatePublicAccess(true)}
-                className="rounded-lg bg-live px-3.5 py-2 text-sm font-medium text-live-fg hover:bg-g-2 disabled:opacity-50"
-              >
-                {accessBusy ? "Opening…" : "Yes, open access"}
-              </button>
-              <button
-                type="button"
-                disabled={accessBusy}
-                onClick={() => setConfirmingPublicAccess(false)}
-                className="rounded-lg border border-line-strong px-3.5 py-2 text-sm text-ink-muted hover:bg-raised disabled:opacity-50"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            type="button"
-            disabled={accessBusy || settingsStatus !== "ready"}
-            onClick={() =>
-              publicAccess
-                ? void updatePublicAccess(false)
-                : setConfirmingPublicAccess(true)
-            }
-            className={`shrink-0 rounded-lg border px-3.5 py-2 text-sm font-medium disabled:opacity-50 ${
-              publicAccess
-                ? "border-line-strong text-ink hover:bg-raised"
-                : "border-line-strong bg-raised text-ink hover:bg-raised"
-            }`}
-          >
-            {accessBusy
-              ? "Updating…"
-              : publicAccess
-                ? "Require access codes"
-                : "Open to everyone"}
-          </button>
+      </header>
+
+      <main className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 pb-24 pt-12">
+        <div className="flex flex-col gap-3">
+          <Label>admin</Label>
+          <Statement className="text-4xl sm:text-5xl">Access control.</Statement>
+        </div>
+
+        {actionError && <Notice>{actionError}</Notice>}
+
+        {!persistent && (
+          <Notice>
+            No Redis configured. Codes live in memory and reset on every
+            restart or redeploy. Add the Upstash integration on Vercel to
+            persist them.
+          </Notice>
         )}
-      </section>
 
-      {requests.length > 0 && (
-        <div className="mb-6 rounded-xl border border-line-strong bg-raised">
-          <div className="border-b border-line-strong px-3 py-2 text-xs font-medium uppercase tracking-wider text-ink">
-            Access requests · {requests.length}
-          </div>
-          <ul className="divide-y divide-line">
-            {requests.map((r) => (
-              <li
-                key={r.id}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2.5 text-sm"
+        <Frame caption="visitor access" readout={accessWord}>
+          <div className="flex flex-col gap-5 p-5 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex flex-col gap-2">
+              <p className="font-serif text-2xl font-light leading-tight text-ink">
+                {publicAccess ? "Anyone with the URL can start." : "Visitors need an enabled code."}
+              </p>
+              <p className="max-w-xl text-sm leading-6 text-ink-muted">
+                {publicAccess
+                  ? "Interviews and code execution are open to everyone. The admin panel remains protected."
+                  : "You can open the app publicly at any time without deleting codes."}
+              </p>
+            </div>
+            {confirmingPublicAccess && !publicAccess ? (
+              <div className="flex shrink-0 flex-col gap-3 sm:items-end">
+                <Notice className="max-w-xs">
+                  Anyone with the URL will be able to start paid voice sessions.
+                </Notice>
+                <div className="flex gap-2">
+                  <Button
+                    variant="danger"
+                    disabled={accessBusy}
+                    onClick={() => void updatePublicAccess(true)}
+                  >
+                    {accessBusy ? "Opening" : "Yes, open access"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    disabled={accessBusy}
+                    onClick={() => setConfirmingPublicAccess(false)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button
+                variant={publicAccess ? "secondary" : "primary"}
+                disabled={accessBusy || settingsStatus !== "ready"}
+                onClick={() =>
+                  publicAccess
+                    ? void updatePublicAccess(false)
+                    : setConfirmingPublicAccess(true)
+                }
               >
-                <span className="font-medium text-ink">{r.name}</span>
-                <a
-                  href={`mailto:${r.email}`}
-                  className="text-ink hover:underline"
-                >
-                  {r.email}
-                </a>
-                {r.note && (
-                  <span className="text-ink-muted">— {r.note}</span>
-                )}
-                <span className="text-xs text-ink-subtle">
-                  {fmtWhen(r.created)}
-                </span>
-                <span className="ml-auto flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => fillFromRequest(r)}
-                    className="rounded-md border border-line-strong bg-raised px-2 py-0.5 text-xs text-ink hover:bg-line"
-                  >
-                    Use as label
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => dismissRequest(r.id)}
-                    className="text-xs text-ink-subtle hover:text-ink"
-                  >
-                    dismiss
-                  </button>
-                </span>
-              </li>
-            ))}
-          </ul>
-          <p className="px-3 py-2 text-xs text-ink-subtle">
-            Generate a code below, share it, then dismiss the request.
-          </p>
-        </div>
-      )}
+                {accessBusy
+                  ? "Updating"
+                  : publicAccess
+                    ? "Require access codes"
+                    : "Open to everyone"}
+              </Button>
+            )}
+          </div>
+        </Frame>
 
-      <form onSubmit={generate} className="mb-6 flex gap-2">
-        <input
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          placeholder="Label (e.g. 'Recruiter — Acme', 'Twitter demo')"
-          className="flex-1 rounded-lg border border-line bg-surface px-3.5 py-2 text-sm text-ink outline-none placeholder:text-ink-subtle focus:border-ink-muted"
-        />
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded-lg bg-live px-4 py-2 text-sm font-medium text-live-fg hover:bg-g-2 disabled:opacity-50"
-        >
-          {busy ? "…" : "Generate code"}
-        </button>
-      </form>
-
-      {codes.length === 0 ? (
-        <p className="text-sm text-ink-subtle">
-          No codes yet — generate one to share.
-        </p>
-      ) : (
-        <div className="overflow-x-auto rounded-xl border border-line">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-line text-xs uppercase tracking-wider text-ink-subtle">
-              <tr>
-                <th className="px-3 py-2 font-medium">Label</th>
-                <th className="px-3 py-2 font-medium">Code</th>
-                <th className="px-3 py-2 text-right font-medium">Sessions</th>
-                <th className="px-3 py-2 text-right font-medium">Runs</th>
-                <th className="px-3 py-2 text-right font-medium">Minutes</th>
-                <th className="px-3 py-2 font-medium">Last used</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {codes.map((c) => (
-                <tr
-                  key={c.id}
-                  className={c.enabled ? "" : "text-ink-subtle"}
+        {requests.length > 0 && (
+          <Frame caption="access requests" readout={`${requests.length} waiting`}>
+            <ul className="divide-y divide-line">
+              {requests.map((r) => (
+                <li
+                  key={r.id}
+                  className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3 text-sm"
                 >
-                  <td className="px-3 py-2">{c.label}</td>
-                  <td className="px-3 py-2">
-                    <code
-                      className={`rounded px-1.5 py-0.5 text-xs ${
-                        justCreatedId === c.id
-                          ? "bg-raised text-ink"
-                          : "bg-raised text-ink"
-                      }`}
-                    >
-                      {c.code}
-                    </code>
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">{c.sessions}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{c.runs}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {(c.seconds / 60).toFixed(1)}
-                  </td>
-                  <td className="px-3 py-2 text-xs text-ink-muted">
-                    {fmtWhen(c.lastUsed)}
-                  </td>
-                  <td className="px-3 py-2">
-                    <button
-                      type="button"
-                      onClick={() => toggle(c)}
-                      className={`rounded-md border px-2 py-0.5 text-xs ${
-                        c.enabled
-                          ? "border-line-strong bg-raised text-ink"
-                          : "border-line-strong text-ink-muted hover:bg-raised"
-                      }`}
-                    >
-                      {c.enabled ? "Enabled" : "Disabled"}
-                    </button>
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <button
-                      type="button"
-                      onClick={() => remove(c)}
-                      className="text-xs text-ink-subtle hover:text-ink"
-                    >
-                      delete
-                    </button>
-                  </td>
-                </tr>
+                  <span className="font-medium text-ink">{r.name}</span>
+                  <a
+                    href={`mailto:${r.email}`}
+                    className="text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink"
+                  >
+                    {r.email}
+                  </a>
+                  {r.note && <span className="text-ink-muted">{r.note}</span>}
+                  <span className="font-mono text-xs text-ink-subtle">
+                    {fmtWhen(r.created)}
+                  </span>
+                  <span className="ml-auto flex items-center gap-2">
+                    <Button size="sm" variant="secondary" onClick={() => fillFromRequest(r)}>
+                      Use as label
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => void dismissRequest(r.id)}>
+                      Dismiss
+                    </Button>
+                  </span>
+                </li>
               ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {justCreated && (
-        <div className="mt-4 rounded-lg border border-line-strong bg-raised p-3 text-sm text-ink">
-          <p className="font-medium">Copy this code now—it is shown only once.</p>
-          <code className="mt-2 block select-all text-base tracking-wider">
-            {justCreated}
-          </code>
-        </div>
-      )}
-      <p className="mt-4 text-xs text-ink-subtle">
-        Disabling a code locks out its holder on their next session — even if
-        they&apos;re already unlocked. Minutes are estimated voice time.
-      </p>
+            </ul>
+            <p className="border-t border-line px-5 py-2.5 text-xs text-ink-subtle">
+              Generate a code below, share it, then dismiss the request.
+            </p>
+          </Frame>
+        )}
+
+        <form onSubmit={generate} className="flex flex-col gap-3">
+          <Label>new code</Label>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="Label, e.g. Recruiter at Acme, Twitter demo"
+              aria-label="Code label"
+              className="h-10 flex-1"
+            />
+            <Button type="submit" variant="primary" disabled={busy}>
+              {busy ? "Generating" : "Generate code"}
+            </Button>
+          </div>
+        </form>
+
+        {justCreated && (
+          <div className="flex flex-col gap-3 rounded-lg border border-line bg-raised p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-2">
+              <Label>new code, shown once</Label>
+              <code className="select-all font-mono text-lg tracking-wider text-ink">
+                {justCreated}
+              </code>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void copyJustCreated()}
+              aria-label="Copy code to clipboard"
+            >
+              <Icon name={copied ? "check" : "copy"} size={14} />
+              {copied ? "Copied" : "Copy"}
+            </Button>
+          </div>
+        )}
+
+        <Frame
+          caption="access codes"
+          readout={`${codes.length} codes`}
+        >
+          {codes.length === 0 ? (
+            <p className="px-5 py-6 text-sm text-ink-subtle">
+              No codes yet. Generate one to share.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="border-b border-line">
+                  <tr>
+                    <th className="px-5 py-2.5"><Label>Label</Label></th>
+                    <th className="px-3 py-2.5"><Label>Code</Label></th>
+                    <th className="px-3 py-2.5 text-right"><Label>Sessions</Label></th>
+                    <th className="px-3 py-2.5 text-right"><Label>Runs</Label></th>
+                    <th className="px-3 py-2.5 text-right"><Label>Minutes</Label></th>
+                    <th className="px-3 py-2.5"><Label>Last used</Label></th>
+                    <th className="px-3 py-2.5"><Label>Status</Label></th>
+                    <th className="px-5 py-2.5" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {codes.map((c) => (
+                    <tr key={c.id} className={c.enabled ? "text-ink" : "text-ink-subtle"}>
+                      <td className="px-5 py-2.5">{c.label}</td>
+                      <td className="px-3 py-2.5">
+                        <code
+                          className={`font-mono text-xs tracking-wide ${
+                            justCreatedId === c.id ? "text-ink underline underline-offset-4" : ""
+                          }`}
+                        >
+                          {c.code}
+                        </code>
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums">{c.sessions}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums">{c.runs}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums">
+                        {(c.seconds / 60).toFixed(1)}
+                      </td>
+                      <td className="px-3 py-2.5 font-mono text-xs text-ink-muted">
+                        {fmtWhen(c.lastUsed)}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <Button
+                          size="sm"
+                          variant={c.enabled ? "secondary" : "ghost"}
+                          onClick={() => void toggle(c)}
+                        >
+                          {c.enabled ? "Enabled" : "Disabled"}
+                        </Button>
+                      </td>
+                      <td className="px-5 py-2.5 text-right">
+                        <Button size="sm" variant="danger" onClick={() => void remove(c)}>
+                          <Icon name="trash" size={14} />
+                          Delete
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="border-t border-line px-5 py-2.5 font-mono text-[11px] text-ink-subtle">
+            {enabledCount} enabled
+          </p>
+        </Frame>
+
+        <p className="text-xs leading-5 text-ink-subtle">
+          Disabling a code locks out its holder on their next session, even if
+          they&apos;re already unlocked. Minutes are estimated voice time.
+        </p>
+      </main>
     </div>
   );
 }

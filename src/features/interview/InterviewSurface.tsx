@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RealtimeSession } from "@openai/agents/realtime";
 import {
-  MODE_LABELS,
   NOISE_GATE_DB,
   REALTIME_MODELS,
   SESSION_CAP_MINUTES,
@@ -12,64 +11,33 @@ import {
   type GatedMic,
   type InterviewMode,
 } from "@/features/voice";
+import { Button, DotRing, Icon, Label } from "@/components/ui";
 import type { Problem } from "./problems";
 import { DEFAULT_LANGUAGE, LANGUAGES, starterFor } from "./languages";
 import { createInterviewSession } from "./interviewController";
 import { CodeEditor } from "./CodeEditor";
-
-// Brightness says how live it is; shape says what kind of quiet. Error is a
-// hollow ring, muted a struck ring, so no state relies on colour alone.
-const ACTIVITY_COLOR: Record<string, string> = {
-  idle: "bg-ink-subtle",
-  connecting: "bg-g-2",
-  listening: "bg-ink-muted",
-  speaking: "bg-live",
-  muted: "bg-ink-subtle ring-2 ring-inset ring-bg",
-  error: "bg-transparent ring-2 ring-ink",
-};
+import { Caption } from "./room/Caption";
+import { HintLadder } from "./room/HintLadder";
+import { PhaseRail } from "./room/PhaseRail";
+import { ProblemTabs, type ProblemTab } from "./room/ProblemTabs";
+import { SettingsPopover } from "./room/SettingsPopover";
+import { Transcript } from "./room/Transcript";
+import { METER_LABEL, MeterAnnouncer, VoiceMeter, type MeterState } from "./room/VoiceMeter";
+import { createStreamLevelReader, dbToUnit } from "./room/streamLevel";
+import {
+  EDITOR_SYNC_PREFIX,
+  buildTurns,
+  lastInterviewerLine,
+  mergeEntries,
+  type Note,
+  type Phase,
+  type Turn,
+} from "./room/entries";
 
 const CAP_MS = SESSION_CAP_MINUTES * 60_000;
 const MAX_SYNC_OUTPUT_CHARS = 4_000;
 
-// Editor-state updates we silently push into the session so the interviewer
-// always sees the live code (and run output) without being asked. Prefixed so
-// they can be filtered out of the visible transcript and recognized by the
-// model as silent context (see prompts.ts EDITOR AWARENESS).
-const EDITOR_SYNC_PREFIX = "[EDITOR]";
-
-/** Flatten the realtime conversation history into a readable transcript. */
-function buildTranscript(items: unknown[]): string {
-  const lines: string[] = [];
-  for (const raw of items) {
-    const item = raw as {
-      type?: string;
-      role?: string;
-      content?: { type?: string; text?: string; transcript?: string | null }[];
-    };
-    if (item.type !== "message") continue;
-    const who =
-      item.role === "assistant"
-        ? "Interviewer"
-        : item.role === "user"
-          ? "You"
-          : null;
-    if (!who) continue;
-    const text = (item.content ?? [])
-      .map((c) =>
-        c.type === "output_text" || c.type === "input_text"
-          ? (c.text ?? "")
-          : c.type === "output_audio" || c.type === "input_audio"
-            ? (c.transcript ?? "")
-            : "",
-      )
-      .join("")
-      .trim();
-    // Skip the silent editor-sync messages — they're context for the model,
-    // not part of the spoken conversation.
-    if (text && !text.startsWith(EDITOR_SYNC_PREFIX)) lines.push(`${who}: ${text}`);
-  }
-  return lines.join("\n\n");
-}
+const PRE_START_LINE = "Your interviewer won't tell you if you're right.";
 
 type InterviewSurfaceProps = {
   problem: Problem;
@@ -84,13 +52,21 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   const [language, setLanguage] = useState(DEFAULT_LANGUAGE);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [phase, setPhase] = useState<Phase>("clarify");
+  const [hideClock, setHideClock] = useState(false);
+  const [problemTab, setProblemTab] = useState<ProblemTab>("problem");
+  const [dockTranscript, setDockTranscript] = useState(false);
 
   // Voice session state, derived from RealtimeSession events.
   const [status, setStatus] = useState<"idle" | "connecting" | "live">("idle");
+  // `speaking` is the half-duplex latch (mic held closed); `audioPlaying` is
+  // whether interviewer audio is actually arriving. They differ between the
+  // moment a response is expected and its first audio frame.
   const [speaking, setSpeaking] = useState(false);
+  const [audioPlaying, setAudioPlaying] = useState(false);
   const [manualMuted, setManualMuted] = useState(false);
-  const [transcript, setTranscript] = useState("");
-  const [showTranscript, setShowTranscript] = useState(false);
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [notes, setNotes] = useState<Note[]>([]);
   const [micReady, setMicReady] = useState(false);
   const [gateDb, setGateDb] = useState(NOISE_GATE_DB);
 
@@ -123,10 +99,20 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
 
   const sessionRef = useRef<RealtimeSession | null>(null);
   const micRef = useRef<GatedMic | null>(null);
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const speakerLevelRef = useRef<ReturnType<typeof createStreamLevelReader> | null>(null);
   const cleanupSessionListenersRef = useRef<() => void>(() => {});
   const startingRef = useRef(false);
   const closingRef = useRef(false);
   const usageIdRef = useRef<string | null>(null);
+  const hintsRef = useRef(0);
+  // The SDK history has no timestamps; remember when each item first appeared.
+  const seenAtRef = useRef<Map<string, number>>(new Map());
+
+  const addNote = useCallback((note: Note["note"], text: string) => {
+    const at = Date.now();
+    setNotes((n) => [...n, { kind: "note", id: `${note}-${at}-${n.length}`, note, text, at }]);
+  }, []);
 
   // Wall-clock start of the current live stretch. Set when the session goes
   // live, cleared when it ends — so we can report elapsed voice time (the
@@ -153,6 +139,9 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
     cleanupSessionListenersRef.current = () => {};
     sessionRef.current?.close();
     micRef.current?.dispose();
+    speakerLevelRef.current?.dispose();
+    speakerLevelRef.current = null;
+    audioElRef.current = null;
     sessionRef.current = null;
     micRef.current = null;
     setMicReady(false);
@@ -207,19 +196,21 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       pushEditorState(
         `${EDITOR_SYNC_PREFIX} The candidate updated the ${language} editor. Call get_editor_state before reviewing or testing it.`,
       );
+      addNote("code", `code updated (${language})`);
     }, 4000);
     return () => clearTimeout(t);
-  }, [code, language, status, pushEditorState]);
+  }, [code, language, status, pushEditorState, addNote]);
 
   const finishInterview = useCallback(() => {
     flushUsage();
     closeRealtime();
     setSpeaking(false);
+    setAudioPlaying(false);
     setStatus("idle");
     setEnded(true);
   }, [closeRealtime, flushUsage]);
 
-  // Live-adjust the gate threshold from the header slider.
+  // Live-adjust the gate threshold from the settings slider.
   useEffect(() => {
     micRef.current?.setThresholdDb(gateDb);
   }, [gateDb, micReady]);
@@ -269,6 +260,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
     startingRef.current = true;
     setError(null);
     setStatus("connecting");
+    setProblemTab(null);
     try {
       // Microphone access happens only after the explicit Start gesture.
       const mic = await createGatedMic(gateDb).catch(() => {
@@ -280,22 +272,55 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       setMicReady(true);
       await mic.resume();
 
+      // Own the playback element so the meter can analyse the interviewer's
+      // track; the transport sets its srcObject once the remote track arrives.
+      const audioEl = document.createElement("audio");
+      audioElRef.current = audioEl;
+      speakerLevelRef.current = createStreamLevelReader(() =>
+        audioElRef.current?.srcObject instanceof MediaStream
+          ? audioElRef.current.srcObject
+          : null,
+      );
+
       const session = createInterviewSession({
         problem,
         mode,
         micStream: mic.stream,
+        audioElement: audioEl,
         getEditorState: () => editorStateRef.current,
         getTimeRemaining,
-        onHintRequested: () => setHints((h) => h + 1),
+        onHintRequested: () => {
+          hintsRef.current += 1;
+          setHints(hintsRef.current);
+          addNote("nudge", `Nudge ${hintsRef.current}`);
+        },
         // Defer closure until the SDK has returned the tool result.
         onEndSession: () => setTimeout(finishInterview, 0),
         onEditCode: setCode,
+        onPhase: setPhase,
       });
       sessionRef.current = session;
 
-      const onHistory = (items: unknown[]) => setTranscript(buildTranscript(items));
-      const onAudioStart = () => setSpeaking(true);
-      const onAudioStopped = () => setSpeaking(false);
+      const onHistory = (items: unknown[]) => {
+        const seen = seenAtRef.current;
+        const t = Date.now();
+        setTurns(
+          buildTurns(items, (id) => {
+            const at = seen.get(id);
+            if (at !== undefined) return at;
+            seen.set(id, t);
+            return t;
+          }),
+        );
+      };
+      const onAudioStart = () => {
+        setSpeaking(true);
+        setAudioPlaying(true);
+      };
+      const onAudioStopped = () => {
+        setSpeaking(false);
+        setAudioPlaying(false);
+      };
       const onErr = (event: unknown) => {
         if (closingRef.current) return;
         const err = event as { error?: { message?: string }; message?: string };
@@ -382,16 +407,12 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   // stuck muted — force "speaking" off after a turn could plausibly last.
   useEffect(() => {
     if (!speaking) return;
-    const t = setTimeout(() => setSpeaking(false), 20_000);
+    const t = setTimeout(() => {
+      setSpeaking(false);
+      setAudioPlaying(false);
+    }, 20_000);
     return () => clearTimeout(t);
   }, [speaking]);
-
-  // Keep the transcript pinned to the latest exchange.
-  const transcriptRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = transcriptRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [transcript]);
 
   const stopSession = finishInterview;
 
@@ -436,17 +457,16 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
         .filter((s: string) => s && s.length)
         .join("\n")
         .trimEnd();
-      setOutput(text || "(no output)");
+      const shown = text || "(no output)";
+      setOutput(shown);
       // Let the interviewer see what was run and what it produced.
       if (status === "live") {
         lastSyncRef.current = `${language}\0${code}`;
-        const boundedOutput = (text || "(no output)").slice(
-          0,
-          MAX_SYNC_OUTPUT_CHARS,
-        );
+        const boundedOutput = shown.slice(0, MAX_SYNC_OUTPUT_CHARS);
         pushEditorState(
           `${EDITOR_SYNC_PREFIX} The candidate ran the ${language} editor. Call get_editor_state for the code. Output:\n${boundedOutput}`,
         );
+        addNote("ran", `ran: ${shown.split("\n")[0].slice(0, 80)}`);
       }
     } catch (e) {
       setOutput(e instanceof Error ? e.message : String(e));
@@ -475,127 +495,134 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
     return () => clearInterval(tick);
   }, [startedAt, ended, finishInterview]);
 
-  const remainingMs =
-    startedAt === null ? CAP_MS : Math.max(0, CAP_MS - (now - startedAt));
-
-  const remaining = `${Math.floor(remainingMs / 60000)}:${String(
-    Math.floor((remainingMs % 60000) / 1000),
+  const elapsedMs = startedAt === null ? 0 : Math.min(CAP_MS, now - startedAt);
+  const elapsed = `${Math.floor(elapsedMs / 60000)}:${String(
+    Math.floor((elapsedMs % 60000) / 1000),
   ).padStart(2, "0")}`;
 
   const isLive = status === "live" || status === "connecting";
-  const activity = error
+  const meterState: MeterState = error
     ? "error"
-    : status === "connecting"
-      ? "connecting"
-      : status !== "live"
-        ? "idle"
-        : speaking
-          ? "speaking"
-          : manualMuted
-            ? "muted"
-            : "listening";
+    : ended
+      ? "ended"
+      : status === "connecting"
+        ? "connecting"
+        : status !== "live"
+          ? "idle"
+          : audioPlaying
+            ? "speaking"
+            : manualMuted
+              ? "muted"
+              : speaking
+                ? "micPaused"
+                : "listening";
+
+  const getMicLevel = useCallback(
+    () => (micRef.current ? dbToUnit(micRef.current.getLevelDb()) : null),
+    [],
+  );
+  const getSpeakerLevel = useCallback(
+    () => speakerLevelRef.current?.getLevel() ?? null,
+    [],
+  );
+
+  const entries = mergeEntries(turns, notes);
+  const caption = lastInterviewerLine(turns);
+  const preStart = !isLive && !ended;
+
+  const stateStrip = (
+    <div className="flex items-center justify-between gap-3">
+      <Label className={meterState === "speaking" ? "text-ink" : undefined}>
+        {METER_LABEL[meterState]}
+      </Label>
+      <HintLadder used={hints} />
+    </div>
+  );
+
+  const preStartBlock = (
+    <div className="flex flex-col items-start gap-4 px-4 py-6">
+      <p className="font-serif text-[24px] font-light leading-[1.25] tracking-[-0.01em] text-ink">
+        {PRE_START_LINE}
+      </p>
+      <Button variant="primary" onClick={startSession}>
+        <Icon name="play" size={14} />
+        Start session
+      </Button>
+    </div>
+  );
 
   return (
-    <div className="flex h-[100dvh] flex-col">
-      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line px-4 py-3">
-        <div className="flex items-center gap-2">
-          <span
-            className={`inline-block h-2.5 w-2.5 rounded-full ${
-              ACTIVITY_COLOR[activity] ?? "bg-ink-subtle"
-            }`}
+    <div className="flex h-[100dvh] flex-col bg-bg text-ink">
+      <MeterAnnouncer state={meterState} />
+
+      <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line px-4">
+        <DotRing size={22} className="text-ink" />
+        <span className="truncate text-sm font-medium text-ink">{problem.title}</span>
+        <Label className="hidden text-ink-subtle sm:inline">{problem.difficulty}</Label>
+
+        <PhaseRail phase={phase} className="mx-auto hidden w-full max-w-md md:flex" />
+
+        <div className="ml-auto flex items-center gap-1.5 md:ml-0">
+          {!hideClock && (
+            <span
+              className="mr-1 font-mono text-xs tabular-nums text-ink-muted"
+              aria-label="Elapsed time"
+            >
+              {elapsed}
+            </span>
+          )}
+          <SettingsPopover
+            gateDb={gateDb}
+            onGateDb={setGateDb}
+            gateEnabled={isLive && micReady}
+            hideClock={hideClock}
+            onHideClock={setHideClock}
           />
-          <span className="text-sm font-medium">{problem.title}</span>
-          <span className="text-xs text-ink-subtle">{problem.difficulty}</span>
-        </div>
-
-        <span className="text-xs uppercase tracking-wide text-ink-muted">
-          {ended ? "ended" : activity}
-        </span>
-
-        <span className="text-xs text-ink-muted">Hints: {hints}</span>
-
-        <span className="text-xs text-ink-subtle">{MODE_LABELS[mode]}</span>
-
-        {startedAt !== null && (
-          <span className="text-xs text-ink-muted">⏱ {remaining}</span>
-        )}
-
-        <div className="ml-auto flex gap-2">
-          {!isLive && !ended && (
-            <button
-              type="button"
-              onClick={startSession}
-              className="rounded-md bg-live px-3 py-1.5 text-sm font-medium text-live-fg hover:bg-g-2"
-            >
-              Start session
-            </button>
-          )}
-          {isLive && micReady && (
-            <label
-              className="flex items-center gap-1.5 rounded-md border border-line-strong px-2 text-xs text-ink-muted"
-              title="Noise gate — mic sounds quieter than this never reach the interviewer. Raise it if background noise still gets through; lower it if it clips your voice."
-            >
-              gate
-              <input
-                type="range"
-                min={-70}
-                max={-30}
-                step={1}
-                value={gateDb}
-                onChange={(e) => setGateDb(Number(e.target.value))}
-                className="w-20 accent-g-2"
-              />
-              <span className="w-12 tabular-nums text-ink-subtle">
-                {gateDb} dB
-              </span>
-            </label>
-          )}
           {isLive && (
-            <button
-              type="button"
+            <Button
+              size="sm"
+              variant={manualMuted ? "primary" : "secondary"}
               onClick={toggleMute}
-              className={`rounded-md border px-3 py-1.5 text-sm ${
-                manualMuted
-                  ? "border-line-strong bg-raised text-ink"
-                  : "border-line-strong hover:bg-raised"
-              }`}
+              aria-pressed={manualMuted}
             >
-              {manualMuted ? "🔇 Muted" : "🎤 Mute"}
-            </button>
+              <Icon name={manualMuted ? "micOff" : "mic"} size={14} />
+              {manualMuted ? "Muted" : "Mute"}
+            </Button>
           )}
           {isLive && (
-            <button
-              type="button"
-              onClick={stopSession}
-              className="rounded-md border border-line-strong px-3 py-1.5 text-sm hover:bg-raised"
-            >
-              End session
-            </button>
+            <Button size="sm" variant="danger" onClick={stopSession}>
+              <Icon name="stop" size={14} />
+              End
+            </Button>
           )}
-          <button
-            type="button"
-            onClick={onExit}
-            className="rounded-md border border-line-strong px-3 py-1.5 text-sm text-ink-muted hover:bg-raised"
-          >
-            Back to problems
-          </button>
+          <Button size="sm" variant="ghost" onClick={onExit}>
+            <Icon name="arrowLeft" size={14} />
+            Back
+          </Button>
         </div>
       </header>
 
+      <div className="border-b border-line px-4 py-2 md:hidden">
+        <PhaseRail phase={phase} />
+      </div>
+
       {error && (
-        <div className="border-b border-line-strong bg-raised px-4 py-2 text-sm text-ink">
-          {error}
+        <div className="flex items-center gap-2 border-b border-line-strong bg-raised px-4 py-2 text-sm text-ink">
+          <Icon name="warning" size={14} className="text-ink-muted" />
+          <span>{error}</span>
         </div>
       )}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-2">
-        <div className="flex min-h-0 flex-col border-r border-line">
-          <div className="flex items-center gap-2 border-b border-line bg-surface px-3 py-1.5">
-            <span className="text-xs text-ink-subtle">Language</span>
+      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] lg:grid-cols-[3fr_2fr] lg:grid-rows-1">
+        {/* Editor column */}
+        <div className="flex min-h-0 flex-col lg:border-r lg:border-line">
+          <div className="flex h-10 items-center gap-2 border-b border-line bg-surface px-3">
+            <Label className="text-ink-subtle">Language</Label>
             <select
               value={language}
               onChange={(e) => changeLanguage(e.target.value)}
-              className="rounded-md border border-line bg-surface px-2 py-1 text-xs text-ink outline-none focus:border-ink-muted"
+              aria-label="Language"
+              className="h-7 rounded-md border border-line bg-surface px-2 font-mono text-xs text-ink outline-none focus:border-ink-muted"
             >
               {LANGUAGES.map((l) => (
                 <option key={l.id} value={l.id}>
@@ -603,14 +630,16 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
                 </option>
               ))}
             </select>
-            <button
-              type="button"
+            <Button
+              size="sm"
+              variant="primary"
               onClick={runCode}
               disabled={running}
-              className="ml-auto rounded-md bg-live px-3 py-1 text-xs font-medium text-live-fg transition-colors hover:bg-g-2 disabled:opacity-50"
+              className="ml-auto h-7"
             >
-              {running ? "Running…" : "Run ▶"}
-            </button>
+              <Icon name="play" size={12} />
+              {running ? "Running" : "Run"}
+            </Button>
           </div>
           <div className="min-h-0 flex-1">
             <CodeEditor
@@ -620,25 +649,20 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
               onChange={setCode}
             />
           </div>
-          <div
-            className="flex shrink-0 flex-col bg-bg"
-            style={{ height: outputHeight }}
-          >
+          <div className="flex shrink-0 flex-col bg-bg" style={{ height: outputHeight }}>
             <div
               onPointerDown={startResizeOutput}
               className="h-1.5 shrink-0 cursor-row-resize bg-raised hover:bg-line-strong"
               title="Drag to resize"
             />
             <div className="min-h-0 flex-1 overflow-y-auto p-3">
-              <div className="mb-1 flex items-center justify-between">
-                <span className="text-xs uppercase tracking-wide text-ink-subtle">
-                  Output
-                </span>
+              <div className="mb-1.5 flex items-center justify-between">
+                <Label className="text-ink-subtle">Output</Label>
                 {output !== null && !running && (
                   <button
                     type="button"
                     onClick={() => setOutput(null)}
-                    className="text-xs text-ink-subtle hover:text-ink"
+                    className="font-mono text-[11px] text-ink-subtle hover:text-ink"
                   >
                     clear
                   </button>
@@ -646,13 +670,11 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
               </div>
               <pre className="whitespace-pre-wrap break-words text-xs text-ink">
                 {running ? (
-                  "Running…"
+                  <span className="text-ink-muted">Running</span>
                 ) : output !== null ? (
                   output
                 ) : (
-                  <span className="text-ink-subtle">
-                    Press Run ▶ to execute your code.
-                  </span>
+                  <span className="text-ink-subtle">Press Run to execute your code.</span>
                 )}
               </pre>
               <p className="mt-2 text-[11px] leading-relaxed text-ink-subtle">
@@ -663,69 +685,82 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-col">
-          <div className="border-b border-line p-4 text-sm">
-            <p className="text-ink">{problem.statement}</p>
-            <ul className="mt-2 list-inside list-disc text-ink-muted">
-              {problem.constraints.map((c) => (
-                <li key={c}>{c}</li>
-              ))}
-            </ul>
-            {problem.examples.length > 0 && (
-              <div className="mt-3 space-y-1">
-                {problem.examples.map((e, i) => (
-                  <div
-                    key={i}
-                    className="rounded bg-raised px-2 py-1 text-xs"
-                  >
-                    <code className="text-ink">{e.input}</code>
-                    <span className="text-ink-muted"> → </span>
-                    <code className="text-ink">{e.output}</code>
-                    {e.explanation && (
-                      <span className="text-ink-subtle"> — {e.explanation}</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+        {/* Interviewer column (lg and up) */}
+        <aside className="hidden min-h-0 flex-col lg:flex" aria-label="Interviewer">
+          <div className="flex flex-col gap-3 border-b border-line px-4 pb-3 pt-4">
+            <VoiceMeter
+              state={meterState}
+              getMicLevel={getMicLevel}
+              getSpeakerLevel={getSpeakerLevel}
+            />
+            {stateStrip}
           </div>
 
-          <div className="flex items-center justify-between border-b border-line px-4 py-2">
-            <h2 className="text-xs uppercase tracking-wide text-ink-subtle">
-              Transcript
-            </h2>
-            <button
-              type="button"
-              onClick={() => setShowTranscript((s) => !s)}
-              className={`rounded-md border px-2.5 py-1 text-xs ${
-                showTranscript
-                  ? "border-line-strong bg-raised text-ink"
-                  : "border-line-strong text-ink-muted hover:bg-raised"
-              }`}
-            >
-              {showTranscript ? "Hide" : "Show"}
-            </button>
-          </div>
-          {showTranscript && (
-            <div
-              ref={transcriptRef}
-              className="min-h-0 flex-1 overflow-y-auto p-4"
-            >
-              {ended && (
-                <p className="mb-2 rounded bg-raised px-2 py-1 text-xs text-ink-muted">
-                  Interview ended.
-                </p>
-              )}
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink">
-                {transcript || (
-                  <span className="text-ink-subtle">
-                    Click Start session, allow the mic, and begin talking
-                    through the problem.
-                  </span>
-                )}
-              </p>
-            </div>
+          {preStart ? (
+            <div className="min-h-0 flex-1 overflow-y-auto">{preStartBlock}</div>
+          ) : (
+            <>
+              <div className="border-b border-line px-4 py-4">
+                <Caption text={caption} className="min-h-[2.5em]" />
+              </div>
+              <Transcript
+                entries={entries}
+                startedAt={startedAt}
+                ended={ended}
+                className="min-h-0 flex-1"
+              />
+            </>
           )}
+
+          <ProblemTabs problem={problem} open={problemTab} onChange={setProblemTab} />
+        </aside>
+
+        {/* Bottom dock (below lg) */}
+        <div className="flex max-h-[55dvh] flex-col border-t border-line lg:hidden">
+          {preStart ? (
+            preStartBlock
+          ) : (
+            <>
+              <div className="flex items-center gap-3 px-4 pt-3">
+                <VoiceMeter
+                  state={meterState}
+                  getMicLevel={getMicLevel}
+                  getSpeakerLevel={getSpeakerLevel}
+                  height={28}
+                />
+                <Label className={meterState === "speaking" ? "text-ink" : undefined}>
+                  {METER_LABEL[meterState]}
+                </Label>
+                <HintLadder used={hints} />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="ml-auto"
+                  onClick={() => setDockTranscript((s) => !s)}
+                  aria-expanded={dockTranscript}
+                >
+                  Transcript
+                  <Icon
+                    name="chevronDown"
+                    size={12}
+                    className={dockTranscript ? "" : "-rotate-90"}
+                  />
+                </Button>
+              </div>
+              <div className="px-4 py-3">
+                <Caption text={caption} className="line-clamp-3 text-[20px]!" />
+              </div>
+              {dockTranscript && (
+                <Transcript
+                  entries={entries}
+                  startedAt={startedAt}
+                  ended={ended}
+                  className="min-h-0 flex-1 border-t border-line"
+                />
+              )}
+            </>
+          )}
+          <ProblemTabs problem={problem} open={problemTab} onChange={setProblemTab} />
         </div>
       </div>
     </div>

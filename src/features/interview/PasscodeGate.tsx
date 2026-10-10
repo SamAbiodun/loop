@@ -8,6 +8,10 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { Button, Icon, Label, Logo, Statement } from "@/components/ui";
+import { Input, Textarea } from "@/features/admin/ui/Field";
+import { Notice } from "@/features/admin/ui/Notice";
+import { Checking } from "@/features/admin/ui/Checking";
 
 type Status = "checking" | "locked" | "unlocked";
 type GateContextValue = { required: boolean; logout: () => Promise<void> };
@@ -57,10 +61,10 @@ export function PasscodeGate({ children }: { children: ReactNode }) {
         setReqSent(true);
       } else {
         const d = (await res.json().catch(() => ({}))) as { error?: string };
-        setReqError(d.error ?? "Couldn't send that — please try again.");
+        setReqError(d.error ?? "Couldn't send that. Please try again.");
       }
     } catch {
-      setReqError("Something went wrong — please try again.");
+      setReqError("Something went wrong. Please try again.");
     } finally {
       setReqSubmitting(false);
     }
@@ -141,7 +145,7 @@ export function PasscodeGate({ children }: { children: ReactNode }) {
         setError(d.error ?? "Incorrect passcode.");
       }
     } catch {
-      setError("Something went wrong — please try again.");
+      setError("Something went wrong. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -156,103 +160,108 @@ export function PasscodeGate({ children }: { children: ReactNode }) {
   }
 
   if (status === "checking") {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <p className="text-sm text-ink-subtle">Loading…</p>
-      </div>
-    );
+    return <Checking label="checking access" />;
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-8">
-      <div className="w-full max-w-sm space-y-5">
-        <form onSubmit={submit} className="space-y-5">
-          <div className="space-y-1.5">
-            <h1 className="text-xl font-semibold tracking-tight">loop</h1>
-            <p className="text-sm text-ink-muted">
-              Voice-first DSA mock interviews. Enter the passcode to start.
+    <div data-theme="paper" className="min-h-screen bg-bg text-ink">
+      <header className="flex items-center justify-between px-6 py-5 sm:px-10">
+        <Logo size={26} />
+        <Label className="text-ink-subtle">preview</Label>
+      </header>
+
+      <main className="mx-auto flex w-full max-w-md flex-col px-6 pb-24 pt-10 sm:pt-20">
+        <form onSubmit={submit} className="flex flex-col gap-6">
+          <div className="flex flex-col gap-3">
+            <Label>access</Label>
+            <Statement className="text-4xl sm:text-5xl">Enter your code.</Statement>
+            <p className="text-sm leading-6 text-ink-muted">
+              loop is open by invitation while it&apos;s in preview.
             </p>
           </div>
-          <input
+
+          <Input
             type="password"
             value={passcode}
             onChange={(e) => setPasscode(e.target.value)}
             autoFocus
-            placeholder="Passcode"
-            className="w-full rounded-lg border border-line bg-surface px-3.5 py-2.5 text-sm text-ink outline-none placeholder:text-ink-subtle focus:border-ink-muted focus:ring-2 focus:ring-ink-muted/30"
+            autoComplete="one-time-code"
+            placeholder="access code"
+            aria-label="Access code"
+            className="h-12 font-mono tracking-[0.18em] placeholder:font-sans placeholder:tracking-normal"
           />
-          {error && <p className="text-sm text-ink">{error}</p>}
-          <button
-            type="submit"
-            disabled={submitting || !passcode}
-            className="w-full rounded-lg bg-live px-3.5 py-2.5 text-sm font-medium text-live-fg transition-colors hover:bg-g-2 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {submitting ? "Checking…" : "Unlock"}
-          </button>
+
+          {error && <Notice>{error}</Notice>}
+
+          <Button type="submit" variant="primary" disabled={submitting || !passcode} className="w-full">
+            {submitting ? "Checking" : "Unlock"}
+          </Button>
         </form>
 
-        <div className="border-t border-line pt-5">
-          {reqSent ? (
-            <p className="text-sm text-ink">
-              Your request is in. You&apos;ll get a passcode by email soon.
-            </p>
-          ) : requesting ? (
-            <form onSubmit={submitRequest} className="space-y-3">
-              <p className="text-sm text-ink-muted">
-                Don&apos;t have a passcode? Leave your details and I&apos;ll send
-                you one.
+        <hr className="my-10 border-line" />
+
+        {reqSent ? (
+          <div className="flex items-start gap-2.5 text-sm leading-6 text-ink">
+            <Icon name="check" size={16} className="mt-1 text-ink-muted" />
+            <p>Your request is in. You&apos;ll get a code by email soon.</p>
+          </div>
+        ) : requesting ? (
+          <form onSubmit={submitRequest} className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2">
+              <Label>no code?</Label>
+              <p className="text-sm leading-6 text-ink-muted">
+                Leave your details and I&apos;ll send you one.
               </p>
-              <input
-                type="text"
-                value={reqName}
-                onChange={(e) => setReqName(e.target.value)}
-                autoFocus
-                placeholder="Your name"
-                className="w-full rounded-lg border border-line bg-surface px-3.5 py-2.5 text-sm text-ink outline-none placeholder:text-ink-subtle focus:border-ink-muted focus:ring-2 focus:ring-ink-muted/30"
-              />
-              <input
-                type="email"
-                value={reqEmail}
-                onChange={(e) => setReqEmail(e.target.value)}
-                placeholder="you@example.com"
-                className="w-full rounded-lg border border-line bg-surface px-3.5 py-2.5 text-sm text-ink outline-none placeholder:text-ink-subtle focus:border-ink-muted focus:ring-2 focus:ring-ink-muted/30"
-              />
-              <textarea
-                value={reqNote}
-                onChange={(e) => setReqNote(e.target.value)}
-                placeholder="Anything I should know? (optional)"
-                rows={2}
-                className="w-full resize-none rounded-lg border border-line bg-surface px-3.5 py-2.5 text-sm text-ink outline-none placeholder:text-ink-subtle focus:border-ink-muted focus:ring-2 focus:ring-ink-muted/30"
-              />
-              {reqError && <p className="text-sm text-ink">{reqError}</p>}
-              <div className="flex items-center gap-3">
-                <button
-                  type="submit"
-                  disabled={reqSubmitting || !reqName || !reqEmail}
-                  className="flex-1 rounded-lg bg-live px-3.5 py-2.5 text-sm font-medium text-live-fg transition-colors hover:bg-g-2 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {reqSubmitting ? "Sending…" : "Request access"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRequesting(false)}
-                  className="text-sm text-ink-subtle hover:text-ink"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setRequesting(true)}
-              className="text-sm text-ink-muted underline-offset-4 hover:text-ink hover:underline"
-            >
-              Don&apos;t have a passcode? Request one →
-            </button>
-          )}
-        </div>
-      </div>
+            </div>
+            <Input
+              type="text"
+              value={reqName}
+              onChange={(e) => setReqName(e.target.value)}
+              autoFocus
+              autoComplete="name"
+              placeholder="Your name"
+              aria-label="Your name"
+            />
+            <Input
+              type="email"
+              value={reqEmail}
+              onChange={(e) => setReqEmail(e.target.value)}
+              autoComplete="email"
+              placeholder="you@example.com"
+              aria-label="Email"
+            />
+            <Textarea
+              value={reqNote}
+              onChange={(e) => setReqNote(e.target.value)}
+              placeholder="Anything I should know? (optional)"
+              aria-label="Note"
+              rows={2}
+            />
+            {reqError && <Notice>{reqError}</Notice>}
+            <div className="flex items-center gap-3">
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={reqSubmitting || !reqName || !reqEmail}
+                className="flex-1"
+              >
+                {reqSubmitting ? "Sending" : "Request access"}
+              </Button>
+              <Button variant="ghost" onClick={() => setRequesting(false)}>
+                Cancel
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <div className="flex items-center justify-between gap-4">
+            <Label>no code?</Label>
+            <Button variant="ghost" onClick={() => setRequesting(true)}>
+              Request one
+              <Icon name="arrowRight" size={14} />
+            </Button>
+          </div>
+        )}
+      </main>
     </div>
   );
 }

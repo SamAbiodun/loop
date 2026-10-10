@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { tool } from "@openai/agents/realtime";
 
+import { PHASES, type Phase } from "./room/entries";
+
 export type EditorState = { code: string; language: string };
 const MAX_EDITOR_CHARS = 100_000;
 
@@ -81,6 +83,23 @@ export function createEndTool(onEnd: () => void) {
     execute: async () => {
       onEnd();
       return { ended: true };
+    },
+  });
+}
+
+export type { Phase };
+
+export function createSetPhaseTool(onPhase: (phase: Phase) => void) {
+  return tool({
+    name: "set_phase",
+    description:
+      "Silently record which phase of the interview the conversation has moved into: clarify (restating the problem, examples, clarifying questions), approach (eliciting the idea, complexity, edge cases, dry run), code (the candidate is implementing), test (running or tracing the code and debugging), analyze (follow-up questions and final feedback). Call it the moment the conversation moves into a new phase, and again if it moves back. This is NOT spoken and the candidate is never told about it; it only updates a small indicator on screen. Never mention it or describe phases aloud because of it.",
+    parameters: z.object({
+      phase: z.enum(PHASES as [Phase, ...Phase[]]).describe("The phase the interview is now in."),
+    }),
+    execute: async ({ phase }) => {
+      onPhase(phase);
+      return { phase };
     },
   });
 }
