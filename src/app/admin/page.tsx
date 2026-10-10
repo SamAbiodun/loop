@@ -4,7 +4,7 @@ export const metadata = { title: "loop · admin" };
 
 export default function AdminPage() {
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-bg text-ink">
       <AdminPanel />
     </main>
   );

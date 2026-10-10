@@ -1,16 +1,83 @@
 @import "tailwindcss";
 
-@theme inline {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    "Liberation Mono", monospace;
+/* Pure cool greyscale. Light is the only signal: the brightest thing on screen
+   is what is live. Night is the default (the interview room); paper is an
+   opt-in surface theme for reading screens. */
+:root {
+  --g-0: #f7f8fa;
+  --g-1: #e6e8ec;
+  --g-2: #c5c9d1;
+  --g-3: #9aa0ab;
+  --g-4: #6b7079;
+  --g-5: #454952;
+  --g-6: #2a2e36;
+  --g-7: #181b21;
+  --g-8: #0b0d12;
+
+  --bg: var(--g-8);
+  --surface: var(--g-7);
+  --raised: var(--g-6);
+  --line: var(--g-6);
+  --line-strong: var(--g-4);
+  --ink: var(--g-1);
+  --ink-muted: var(--g-3);
+  --ink-subtle: #848a97;
+  --live: var(--g-0);
+  --live-fg: var(--g-8);
+  color-scheme: dark;
 }
 
-/* The app is dark-only by design (see the neutral-950/100 palette throughout);
-   setting it here keeps overscroll areas and unstyled surfaces consistent. */
+[data-theme="paper"] {
+  --bg: var(--g-0);
+  --surface: var(--g-1);
+  --raised: #ffffff;
+  --line: var(--g-2);
+  --line-strong: var(--g-4);
+  --ink: var(--g-8);
+  --ink-muted: var(--g-4);
+  --ink-subtle: var(--g-4);
+  --live: var(--g-8);
+  --live-fg: var(--g-0);
+  color-scheme: light;
+}
+
+@theme inline {
+  --color-g-0: var(--g-0);
+  --color-g-1: var(--g-1);
+  --color-g-2: var(--g-2);
+  --color-g-3: var(--g-3);
+  --color-g-4: var(--g-4);
+  --color-g-5: var(--g-5);
+  --color-g-6: var(--g-6);
+  --color-g-7: var(--g-7);
+  --color-g-8: var(--g-8);
+
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-subtle: var(--ink-subtle);
+  --color-live: var(--live);
+  --color-live-fg: var(--live-fg);
+
+  --font-sans: var(--font-hanken), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-zodiak), ui-serif, Georgia, serif;
+  --font-mono: var(--font-commit), ui-monospace, Menlo, monospace;
+}
+
 body {
-  background-color: var(--color-neutral-950);
-  color: var(--color-neutral-100);
+  background-color: var(--bg);
+  color: var(--ink);
   font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+code,
+kbd,
+pre {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
 }

@@ -17,13 +17,15 @@ import { DEFAULT_LANGUAGE, LANGUAGES, starterFor } from "./languages";
 import { createInterviewSession } from "./interviewController";
 import { CodeEditor } from "./CodeEditor";
 
+// Brightness says how live it is; shape says what kind of quiet. Error is a
+// hollow ring, muted a struck ring, so no state relies on colour alone.
 const ACTIVITY_COLOR: Record<string, string> = {
-  idle: "bg-neutral-500",
-  connecting: "bg-yellow-400",
-  listening: "bg-green-500",
-  speaking: "bg-blue-400",
-  muted: "bg-amber-500",
-  error: "bg-red-500",
+  idle: "bg-ink-subtle",
+  connecting: "bg-g-2",
+  listening: "bg-ink-muted",
+  speaking: "bg-live",
+  muted: "bg-ink-subtle ring-2 ring-inset ring-bg",
+  error: "bg-transparent ring-2 ring-ink",
 };
 
 const CAP_MS = SESSION_CAP_MINUTES * 60_000;
@@ -495,27 +497,27 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
 
   return (
     <div className="flex h-[100dvh] flex-col">
-      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-neutral-800 px-4 py-3">
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line px-4 py-3">
         <div className="flex items-center gap-2">
           <span
             className={`inline-block h-2.5 w-2.5 rounded-full ${
-              ACTIVITY_COLOR[activity] ?? "bg-neutral-500"
+              ACTIVITY_COLOR[activity] ?? "bg-ink-subtle"
             }`}
           />
           <span className="text-sm font-medium">{problem.title}</span>
-          <span className="text-xs text-neutral-500">{problem.difficulty}</span>
+          <span className="text-xs text-ink-subtle">{problem.difficulty}</span>
         </div>
 
-        <span className="text-xs uppercase tracking-wide text-neutral-400">
+        <span className="text-xs uppercase tracking-wide text-ink-muted">
           {ended ? "ended" : activity}
         </span>
 
-        <span className="text-xs text-neutral-400">Hints: {hints}</span>
+        <span className="text-xs text-ink-muted">Hints: {hints}</span>
 
-        <span className="text-xs text-neutral-500">{MODE_LABELS[mode]}</span>
+        <span className="text-xs text-ink-subtle">{MODE_LABELS[mode]}</span>
 
         {startedAt !== null && (
-          <span className="text-xs text-neutral-400">⏱ {remaining}</span>
+          <span className="text-xs text-ink-muted">⏱ {remaining}</span>
         )}
 
         <div className="ml-auto flex gap-2">
@@ -523,14 +525,14 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
             <button
               type="button"
               onClick={startSession}
-              className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500"
+              className="rounded-md bg-live px-3 py-1.5 text-sm font-medium text-live-fg hover:bg-g-2"
             >
               Start session
             </button>
           )}
           {isLive && micReady && (
             <label
-              className="flex items-center gap-1.5 rounded-md border border-neutral-700 px-2 text-xs text-neutral-400"
+              className="flex items-center gap-1.5 rounded-md border border-line-strong px-2 text-xs text-ink-muted"
               title="Noise gate — mic sounds quieter than this never reach the interviewer. Raise it if background noise still gets through; lower it if it clips your voice."
             >
               gate
@@ -541,9 +543,9 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
                 step={1}
                 value={gateDb}
                 onChange={(e) => setGateDb(Number(e.target.value))}
-                className="w-20 accent-blue-500"
+                className="w-20 accent-g-2"
               />
-              <span className="w-12 tabular-nums text-neutral-500">
+              <span className="w-12 tabular-nums text-ink-subtle">
                 {gateDb} dB
               </span>
             </label>
@@ -554,8 +556,8 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
               onClick={toggleMute}
               className={`rounded-md border px-3 py-1.5 text-sm ${
                 manualMuted
-                  ? "border-red-600 bg-red-600/20 text-red-200"
-                  : "border-neutral-600 hover:bg-neutral-800"
+                  ? "border-line-strong bg-raised text-ink"
+                  : "border-line-strong hover:bg-raised"
               }`}
             >
               {manualMuted ? "🔇 Muted" : "🎤 Mute"}
@@ -565,7 +567,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
             <button
               type="button"
               onClick={stopSession}
-              className="rounded-md border border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-800"
+              className="rounded-md border border-line-strong px-3 py-1.5 text-sm hover:bg-raised"
             >
               End session
             </button>
@@ -573,7 +575,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
           <button
             type="button"
             onClick={onExit}
-            className="rounded-md border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 hover:bg-neutral-800"
+            className="rounded-md border border-line-strong px-3 py-1.5 text-sm text-ink-muted hover:bg-raised"
           >
             Back to problems
           </button>
@@ -581,19 +583,19 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       </header>
 
       {error && (
-        <div className="border-b border-red-900 bg-red-950/60 px-4 py-2 text-sm text-red-200">
+        <div className="border-b border-line-strong bg-raised px-4 py-2 text-sm text-ink">
           {error}
         </div>
       )}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-2">
-        <div className="flex min-h-0 flex-col border-r border-neutral-800">
-          <div className="flex items-center gap-2 border-b border-neutral-800 bg-neutral-900/40 px-3 py-1.5">
-            <span className="text-xs text-neutral-500">Language</span>
+        <div className="flex min-h-0 flex-col border-r border-line">
+          <div className="flex items-center gap-2 border-b border-line bg-surface px-3 py-1.5">
+            <span className="text-xs text-ink-subtle">Language</span>
             <select
               value={language}
               onChange={(e) => changeLanguage(e.target.value)}
-              className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none focus:border-blue-500/60"
+              className="rounded-md border border-line bg-surface px-2 py-1 text-xs text-ink outline-none focus:border-ink-muted"
             >
               {LANGUAGES.map((l) => (
                 <option key={l.id} value={l.id}>
@@ -605,7 +607,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
               type="button"
               onClick={runCode}
               disabled={running}
-              className="ml-auto rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
+              className="ml-auto rounded-md bg-live px-3 py-1 text-xs font-medium text-live-fg transition-colors hover:bg-g-2 disabled:opacity-50"
             >
               {running ? "Running…" : "Run ▶"}
             </button>
@@ -619,41 +621,41 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
             />
           </div>
           <div
-            className="flex shrink-0 flex-col bg-neutral-950"
+            className="flex shrink-0 flex-col bg-bg"
             style={{ height: outputHeight }}
           >
             <div
               onPointerDown={startResizeOutput}
-              className="h-1.5 shrink-0 cursor-row-resize bg-neutral-800 hover:bg-neutral-600"
+              className="h-1.5 shrink-0 cursor-row-resize bg-raised hover:bg-line-strong"
               title="Drag to resize"
             />
             <div className="min-h-0 flex-1 overflow-y-auto p-3">
               <div className="mb-1 flex items-center justify-between">
-                <span className="text-xs uppercase tracking-wide text-neutral-500">
+                <span className="text-xs uppercase tracking-wide text-ink-subtle">
                   Output
                 </span>
                 {output !== null && !running && (
                   <button
                     type="button"
                     onClick={() => setOutput(null)}
-                    className="text-xs text-neutral-500 hover:text-neutral-300"
+                    className="text-xs text-ink-subtle hover:text-ink"
                   >
                     clear
                   </button>
                 )}
               </div>
-              <pre className="whitespace-pre-wrap break-words text-xs text-neutral-200">
+              <pre className="whitespace-pre-wrap break-words text-xs text-ink">
                 {running ? (
                   "Running…"
                 ) : output !== null ? (
                   output
                 ) : (
-                  <span className="text-neutral-600">
+                  <span className="text-ink-subtle">
                     Press Run ▶ to execute your code.
                   </span>
                 )}
               </pre>
-              <p className="mt-2 text-[11px] leading-relaxed text-neutral-600">
+              <p className="mt-2 text-[11px] leading-relaxed text-ink-subtle">
                 Run sends the current code to Paiza&apos;s public execution service.
                 Do not include secrets or private data.
               </p>
@@ -662,9 +664,9 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
         </div>
 
         <div className="flex min-h-0 flex-col">
-          <div className="border-b border-neutral-800 p-4 text-sm">
-            <p className="text-neutral-200">{problem.statement}</p>
-            <ul className="mt-2 list-inside list-disc text-neutral-400">
+          <div className="border-b border-line p-4 text-sm">
+            <p className="text-ink">{problem.statement}</p>
+            <ul className="mt-2 list-inside list-disc text-ink-muted">
               {problem.constraints.map((c) => (
                 <li key={c}>{c}</li>
               ))}
@@ -674,13 +676,13 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
                 {problem.examples.map((e, i) => (
                   <div
                     key={i}
-                    className="rounded bg-neutral-800/60 px-2 py-1 text-xs"
+                    className="rounded bg-raised px-2 py-1 text-xs"
                   >
-                    <code className="text-neutral-100">{e.input}</code>
-                    <span className="text-neutral-400"> → </span>
-                    <code className="text-neutral-100">{e.output}</code>
+                    <code className="text-ink">{e.input}</code>
+                    <span className="text-ink-muted"> → </span>
+                    <code className="text-ink">{e.output}</code>
                     {e.explanation && (
-                      <span className="text-neutral-500"> — {e.explanation}</span>
+                      <span className="text-ink-subtle"> — {e.explanation}</span>
                     )}
                   </div>
                 ))}
@@ -688,8 +690,8 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
             )}
           </div>
 
-          <div className="flex items-center justify-between border-b border-neutral-800/60 px-4 py-2">
-            <h2 className="text-xs uppercase tracking-wide text-neutral-500">
+          <div className="flex items-center justify-between border-b border-line px-4 py-2">
+            <h2 className="text-xs uppercase tracking-wide text-ink-subtle">
               Transcript
             </h2>
             <button
@@ -697,8 +699,8 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
               onClick={() => setShowTranscript((s) => !s)}
               className={`rounded-md border px-2.5 py-1 text-xs ${
                 showTranscript
-                  ? "border-blue-600/60 bg-blue-600/15 text-blue-200"
-                  : "border-neutral-700 text-neutral-400 hover:bg-neutral-800"
+                  ? "border-line-strong bg-raised text-ink"
+                  : "border-line-strong text-ink-muted hover:bg-raised"
               }`}
             >
               {showTranscript ? "Hide" : "Show"}
@@ -710,13 +712,13 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
               className="min-h-0 flex-1 overflow-y-auto p-4"
             >
               {ended && (
-                <p className="mb-2 rounded bg-neutral-800 px-2 py-1 text-xs text-neutral-300">
+                <p className="mb-2 rounded bg-raised px-2 py-1 text-xs text-ink-muted">
                   Interview ended.
                 </p>
               )}
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-neutral-200">
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink">
                 {transcript || (
-                  <span className="text-neutral-500">
+                  <span className="text-ink-subtle">
                     Click Start session, allow the mic, and begin talking
                     through the problem.
                   </span>

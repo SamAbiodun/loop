@@ -3,7 +3,7 @@ import { PasscodeGate } from "@/features/interview/PasscodeGate";
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-bg text-ink">
       <PasscodeGate>
         <InterviewApp />
       </PasscodeGate>
