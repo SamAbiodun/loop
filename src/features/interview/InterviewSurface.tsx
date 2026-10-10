@@ -37,6 +37,16 @@ import {
 const CAP_MS = SESSION_CAP_MINUTES * 60_000;
 const MAX_SYNC_OUTPUT_CHARS = 4_000;
 
+// When OpenAI answers the WebRTC offer with an error (no credits, rate limit,
+// bad key), the SDK tries to parse the JSON body as SDP and reports that
+// instead of the cause. Say what it almost always means.
+function describeVoiceError(message: string): string {
+  if (/setRemoteDescription|SessionDescription|Expect line/i.test(message)) {
+    return "OpenAI refused the voice connection. This usually means the API account is out of credits or rate-limited; check platform.openai.com billing, then try again.";
+  }
+  return message;
+}
+
 const PRE_START_LINE = "Your interviewer won't tell you if you're right.";
 
 type InterviewSurfaceProps = {
@@ -325,9 +335,11 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
         if (closingRef.current) return;
         const err = event as { error?: { message?: string }; message?: string };
         setError(
-          typeof event === "string"
-            ? event
-            : (err?.error?.message ?? err?.message ?? "Voice session error"),
+          describeVoiceError(
+            typeof event === "string"
+              ? event
+              : (err?.error?.message ?? err?.message ?? "Voice session error"),
+          ),
         );
         if (liveSinceRef.current !== null) {
           finishInterview();
@@ -386,7 +398,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       // the first response event), so finalize any live usage before teardown.
       flushUsage();
       closeRealtime();
-      setError(e instanceof Error ? e.message : String(e));
+      setError(describeVoiceError(e instanceof Error ? e.message : String(e)));
       setStatus("idle");
     } finally {
       startingRef.current = false;
