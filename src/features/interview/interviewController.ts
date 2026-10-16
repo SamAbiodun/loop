@@ -11,7 +11,7 @@ import {
   NOISE_REDUCTION,
   REALTIME_MODELS,
   SESSION_CAP_MINUTES,
-  TRANSCRIPTION,
+  // TRANSCRIPTION,
   VAD_EAGERNESS,
   type InterviewMode,
 } from "@/features/voice";
@@ -98,7 +98,7 @@ export function createInterviewSession({
       audio: {
         input: {
           noiseReduction: { type: NOISE_REDUCTION },
-          transcription: { ...TRANSCRIPTION },
+          // transcription: { ...TRANSCRIPTION },
           turnDetection: {
             type: "semantic_vad",
             eagerness: VAD_EAGERNESS,
