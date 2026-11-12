@@ -21,6 +21,7 @@ import { HintLadder } from "./room/HintLadder";
 import { PhaseRail } from "./room/PhaseRail";
 import { ProblemTabs, type ProblemTab } from "./room/ProblemTabs";
 import { SettingsPopover } from "./room/SettingsPopover";
+import { OutOfCredits } from "./room/OutOfCredits";
 import { Transcript } from "./room/Transcript";
 import { METER_LABEL, MeterAnnouncer, VoiceMeter, type MeterState } from "./room/VoiceMeter";
 import { createStreamLevelReader, dbToUnit } from "./room/streamLevel";
@@ -40,8 +41,10 @@ const MAX_SYNC_OUTPUT_CHARS = 4_000;
 // When OpenAI answers the WebRTC offer with an error (no credits, rate limit,
 // bad key), the SDK tries to parse the JSON body as SDP and reports that
 // instead of the cause. Say what it almost always means.
+const QUOTA_ERROR = /setRemoteDescription|SessionDescription|Expect line|insufficient_quota|credit_balance_exhausted/i;
+
 function describeVoiceError(message: string): string {
-  if (/setRemoteDescription|SessionDescription|Expect line/i.test(message)) {
+  if (QUOTA_ERROR.test(message)) {
     return "OpenAI refused the voice connection. This usually means the API account is out of credits or rate-limited; check platform.openai.com billing, then try again.";
   }
   return message;
@@ -59,6 +62,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
   const [hints, setHints] = useState(0);
   const [ended, setEnded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [outOfCredits, setOutOfCredits] = useState(false);
   const [language, setLanguage] = useState(DEFAULT_LANGUAGE);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -334,13 +338,12 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       const onErr = (event: unknown) => {
         if (closingRef.current) return;
         const err = event as { error?: { message?: string }; message?: string };
-        setError(
-          describeVoiceError(
-            typeof event === "string"
-              ? event
-              : (err?.error?.message ?? err?.message ?? "Voice session error"),
-          ),
-        );
+        const raw =
+          typeof event === "string"
+            ? event
+            : (err?.error?.message ?? err?.message ?? "Voice session error");
+        if (QUOTA_ERROR.test(raw)) setOutOfCredits(true);
+        setError(describeVoiceError(raw));
         if (liveSinceRef.current !== null) {
           finishInterview();
         } else {
@@ -398,7 +401,9 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
       // the first response event), so finalize any live usage before teardown.
       flushUsage();
       closeRealtime();
-      setError(describeVoiceError(e instanceof Error ? e.message : String(e)));
+      const raw = e instanceof Error ? e.message : String(e);
+      if (QUOTA_ERROR.test(raw)) setOutOfCredits(true);
+      setError(describeVoiceError(raw));
       setStatus("idle");
     } finally {
       startingRef.current = false;
@@ -618,6 +623,7 @@ export function InterviewSurface({ problem, mode, onExit }: InterviewSurfaceProp
         <PhaseRail phase={phase} />
       </div>
 
+      {outOfCredits && <OutOfCredits onClose={() => setOutOfCredits(false)} />}
       {error && (
         <div className="flex items-center gap-2 border-b border-line-strong bg-raised px-4 py-2 text-sm text-ink">
           <Icon name="warning" size={14} className="text-ink-muted" />
