@@ -1,9 +1,21 @@
+import { useState } from "react";
 import { Button, DotRing, Icon } from "@/components/ui";
 
-export const CREATOR_ALERT_HREF =
-  "mailto:hisamuelab@gmail.com?subject=loop%20is%20out%20of%20API%20credits";
+type AlertState = "idle" | "sending" | "sent" | "failed";
 
 export function OutOfCredits({ onClose }: { onClose: () => void }) {
+  const [state, setState] = useState<AlertState>("idle");
+
+  async function alertCreator() {
+    setState("sending");
+    try {
+      const res = await fetch("/api/alert-creator", { method: "POST" });
+      setState(res.ok || res.status === 429 ? "sent" : "failed");
+    } catch {
+      setState("failed");
+    }
+  }
+
   return (
     <div
       role="dialog"
@@ -19,18 +31,30 @@ export function OutOfCredits({ onClose }: { onClose: () => void }) {
           </h2>
           <p className="font-sans text-sm leading-relaxed text-ink-muted">
             loop runs on OpenAI&apos;s voice models and the account behind it has run dry. Nothing
-            is wrong on your end. A quick nudge gets it topped up.
+            is wrong on your end. One tap pings Sam to top it up.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Button variant="primary" size="md" onClick={() => window.open(CREATOR_ALERT_HREF, "_blank")}>
-            <Icon name="send" size={14} />
-            Alert Sam
-          </Button>
+          {state === "sent" ? (
+            <span className="inline-flex items-center gap-2 font-sans text-sm text-ink">
+              <Icon name="check" size={14} />
+              Sam has been pinged. Thanks.
+            </span>
+          ) : (
+            <Button variant="primary" size="md" onClick={alertCreator} disabled={state === "sending"}>
+              <Icon name="send" size={14} />
+              {state === "sending" ? "Pinging…" : state === "failed" ? "Try again" : "Alert Sam"}
+            </Button>
+          )}
           <Button variant="ghost" size="md" onClick={onClose}>
             Close
           </Button>
         </div>
+        {state === "failed" && (
+          <p className="font-sans text-xs text-ink-subtle">
+            The ping didn&apos;t go through. Email hisamuelab@gmail.com instead.
+          </p>
+        )}
       </div>
     </div>
   );
